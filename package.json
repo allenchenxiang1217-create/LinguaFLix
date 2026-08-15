@@ -1,0 +1,40 @@
+{
+  "name": "lingua-flix",
+  "version": "1.1.0",
+  "description": "Immersive English learning through video — with subtitle blocking, snapshot capture, and AI-assisted vocabulary analysis.",
+  "main": "./out/main/index.js",
+  "scripts": {
+    "dev": "electron-vite dev",
+    "dev:web": "vite --config vite.config.web.ts",
+    "build": "electron-vite build",
+    "preview": "electron-vite preview",
+    "lint": "tsc --noEmit"
+  },
+  "keywords": [
+    "english-learning",
+    "video-player",
+    "electron",
+    "language-learning"
+  ],
+  "author": "",
+  "license": "MIT",
+  "devDependencies": {
+    "@tailwindcss/vite": "^4.3.3",
+    "@types/node": "^26.2.0",
+    "@types/react": "^19.2.18",
+    "@types/react-dom": "^19.2.4",
+    "@vitejs/plugin-react": "^5.2.0",
+    "electron": "^42.4.1",
+    "electron-builder": "^26.0.12",
+    "electron-vite": "^5.0.0",
+    "esearch-ocr": "^8.5.0",
+    "lucide-react": "^1.31.0",
+    "onnxruntime-web": "^1.27.0",
+    "react": "^19.2.8",
+    "react-dom": "^19.2.8",
+    "supermemo": "^2.0.23",
+    "tailwindcss": "^4.3.3",
+    "typescript": "^5.9.3",
+    "zustand": "^5.0.14"
+  }
+}

@@ -1,0 +1,65 @@
+appId: com.linguaflix.app
+productName: LinguaFlix
+directories:
+  buildResources: resources
+  output: release
+files:
+  - out/**/*
+  - "!**/*.map"
+extraResources:
+  - from: resources/icon.png
+    to: icon.png
+  - from: resources/ecdict.db
+    to: ecdict.db
+mac:
+  artifactName: LinguaFlix-${version}-mac.${ext}
+  target:
+    - dmg
+    - zip
+  category: public.app-category.education
+  # ── 签名与公证 ─────────────────────────────────────────────────────────────
+  # 【本地测试】未安装 Developer ID 证书时，electron-builder 会自动跳过签名。
+  #   构建后手动 ad-hoc 签名，避免 Gatekeeper 报「已损坏/无法验证」：
+  #     codesign --deep --force --sign - "release/mac-arm64/LinguaFlix.app"
+  #     xattr -cr "release/mac-arm64/LinguaFlix.app"
+  # 【正式分发（变现收费）】加入 Apple Developer Program（$99/年）后：
+  #   1. 钥匙串里安装 "Developer ID Application" 证书；
+  #   2. 取消下面 identity 注释（或设环境变量 CSC_NAME）；
+  #   3. notarize 改为 true，并设置公证环境变量（见文件底部注释）。
+  hardenedRuntime: true        # 公证必需；无证书时被自动忽略
+  gatekeeperAssess: false      # 构建时不跑 spctl 检查，由公证替代
+  entitlements: resources/entitlements.mac.plist
+  entitlementsInherit: resources/entitlements.mac.plist
+  notarize: false              # 拿到证书后改为 true
+  # identity: "Developer ID Application: 你的名字 (TEAMID)"   # 正式签名时取消注释
+win:
+  artifactName: LinguaFlix-${version}-win.${ext}
+  target:
+    - nsis
+    - portable
+nsis:
+  oneClick: false
+  allowToChangeInstallationDirectory: true
+linux:
+  artifactName: LinguaFlix-${version}-linux.${ext}
+  target:
+    - AppImage
+    - deb
+  category: Education
+
+# ── 公证（notarize: true 时生效）────────────────────────────────────────────
+# 任选一种方式，构建前 export：
+#
+# 方式 A — Apple ID + 专用密码：
+#   export APPLE_ID="you@example.com"
+#   export APPLE_APP_SPECIFIC_PASSWORD="xxxx-xxxx-xxxx-xxxx"   # appleid.apple.com 生成
+#   export APPLE_TEAM_ID="TEAMID1234"
+#
+# 方式 B — App Store Connect API Key（CI 推荐，无 2FA/过期问题）：
+#   export APPLE_API_KEY="/绝对路径/AuthKey_XXXX.p8"   # notarytool 需要文件路径
+#   export APPLE_API_KEY_ID="KEYID"
+#   export APPLE_API_ISSUER="issuer-uuid"
+#
+# 构建后产物还需「钉票」让离线也能验证：
+#   xcrun stapler staple "release/LinguaFlix-1.0.0-mac.dmg"
+#   spctl -a -vv --type install "release/LinguaFlix-1.0.0-mac.dmg"   # 应显示 accepted

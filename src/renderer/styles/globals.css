@@ -1,0 +1,359 @@
+@import "tailwindcss";
+
+@custom-variant dark (&:is(.dark *));
+
+/* ─────────────────────────────────────────────────────────────
+   LinguaFlix · Apple 原生设计系统 (v1)
+   深色主档 · 黑白灰 zinc · 单一苹果蓝 #0071e3 · SF Pro · 毛玻璃
+   ───────────────────────────────────────────────────────────── */
+
+:root {
+  --radius: 0.75rem;
+
+  /* 背景层级 */
+  --background: #131316;          /* 最底层 */
+  --foreground: #f5f5f7;          /* 主文字（近白） */
+  --card: #1c1c1f;                /* 表面 */
+  --card-foreground: #f5f5f7;
+  --popover: #1c1c1f;
+  --popover-foreground: #f5f5f7;
+
+  /* 强调色：苹果蓝 */
+  --primary: #0071e3;
+  --primary-hover: #0077ed;
+  --primary-active: #0066cc;
+  --primary-foreground: #ffffff;
+
+  /* 次要 / 弱化 */
+  --secondary: #1c1c1f;
+  --secondary-foreground: #f5f5f7;
+  --muted: #1c1c1f;
+  --muted-foreground: #a1a1a6;
+  --accent: #1c1c1f;
+  --accent-foreground: #f5f5f7;
+
+  /* 危险 / 反馈 */
+  --destructive: #ff453a;
+  --destructive-foreground: #ffffff;
+
+  /* 边框 / 输入 */
+  --border: rgba(255, 255, 255, 0.10);
+  --input: #1c1c1f;
+  --ring: #0071e3;
+
+  /* 图表色（用于统计与次级点缀，克制使用） */
+  --chart-1: #0071e3;
+  --chart-2: #64d2ff;
+  --chart-3: #5e5ce6;
+  --chart-4: #ff9f0a;
+  --chart-5: #30d158;
+
+  /* 侧栏（毛玻璃） */
+  --sidebar-background: #1c1c1f;
+  --sidebar-foreground: #f5f5f7;
+  --sidebar-primary: #0071e3;
+  --sidebar-primary-foreground: #ffffff;
+  --sidebar-accent: rgba(255, 255, 255, 0.08);
+  --sidebar-accent-foreground: #f5f5f7;
+  --sidebar-border: rgba(255, 255, 255, 0.10);
+  --sidebar-ring: #0071e3;
+
+  /* 字体：macOS 原生 SF Pro，-apple-system 即 SF Pro */
+  --font-sans: -apple-system, BlinkMacSystemFont, 'SF Pro Text', 'SF Pro Display', 'Inter', 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif;
+  --font-mono: 'SF Mono', ui-monospace, 'JetBrains Mono', Menlo, Monaco, Consolas, monospace;
+
+  /* 语义色 */
+  --color-success: #30d158;
+  --color-warning: #ff9f0a;
+  --color-info: #64d2ff;
+}
+
+/* ─────────────────────────────────────────────────────────────
+   浅色主题（白天模式）—— 苹果日间配色，白底黑字，整套反转。
+   由 App.tsx 设 <html data-theme="light"> 触发；深色仍是默认值。
+   ───────────────────────────────────────────────────────────── */
+[data-theme="light"] {
+  --background: #ffffff;
+  --foreground: #1d1d1f;
+  --card: #f5f5f7;
+  --card-foreground: #1d1d1f;
+  --popover: #f5f5f7;
+  --popover-foreground: #1d1d1f;
+
+  --secondary: #f5f5f7;
+  --secondary-foreground: #1d1d1f;
+  --muted: #f5f5f7;
+  --muted-foreground: #6e6e73;
+  --accent: #f5f5f7;
+  --accent-foreground: #1d1d1f;
+
+  --destructive: #ff453a;
+  --destructive-foreground: #ffffff;
+
+  --border: rgba(0, 0, 0, 0.10);
+  --input: #f5f5f7;
+
+  --sidebar-background: #f5f5f7;
+  --sidebar-foreground: #1d1d1f;
+  --sidebar-accent: rgba(0, 0, 0, 0.06);
+  --sidebar-accent-foreground: #1d1d1f;
+  --sidebar-border: rgba(0, 0, 0, 0.10);
+}
+
+/* ─────────────────────────────────────────────────────────────
+   accent 主色预设 —— 由 App.tsx 设 <html data-accent="…"> 触发。
+   blue 为默认（沿用 :root 现有 token，不重复定义）。
+   ───────────────────────────────────────────────────────────── */
+[data-accent="purple"] {
+  --primary: #7c5cf0;
+  --primary-hover: #8a6df2;
+  --primary-active: #6a4bd6;
+  --ring: #7c5cf0;
+  --sidebar-primary: #7c5cf0;
+  --sidebar-ring: #7c5cf0;
+  --chart-1: #7c5cf0;
+  --chart-3: #7c5cf0;
+}
+[data-accent="green"] {
+  --primary: #0d8546;
+  --primary-hover: #0e9a50;
+  --primary-active: #0b723c;
+  --ring: #0d8546;
+  --sidebar-primary: #0d8546;
+  --sidebar-ring: #0d8546;
+  --chart-1: #0d8546;
+  --chart-3: #0d8546;
+}
+[data-accent="orange"] {
+  --primary: #ff9500;
+  --primary-hover: #ffa018;
+  --primary-active: #e68600;
+  --ring: #ff9500;
+  --sidebar-primary: #ff9500;
+  --sidebar-ring: #ff9500;
+  --chart-1: #ff9500;
+  --chart-3: #ff9500;
+}
+[data-accent="red"] {
+  --primary: #ff453a;
+  --primary-hover: #ff5449;
+  --primary-active: #e03d33;
+  --ring: #ff453a;
+  --sidebar-primary: #ff453a;
+  --sidebar-ring: #ff453a;
+  --chart-1: #ff453a;
+  --chart-3: #ff453a;
+}
+[data-accent="teal"] {
+  --primary: #30b0c7;
+  --primary-hover: #3cbcd2;
+  --primary-active: #289bb0;
+  --ring: #30b0c7;
+  --sidebar-primary: #30b0c7;
+  --sidebar-ring: #30b0c7;
+  --chart-1: #30b0c7;
+  --chart-3: #30b0c7;
+}
+
+@theme inline {
+  --radius-sm: calc(var(--radius) - 4px);
+  --radius-md: calc(var(--radius) - 2px);
+  --radius-lg: var(--radius);
+  --radius-xl: calc(var(--radius) + 4px);
+  --color-background: var(--background);
+  --color-foreground: var(--foreground);
+  --color-card: var(--card);
+  --color-card-foreground: var(--card-foreground);
+  --color-popover: var(--popover);
+  --color-popover-foreground: var(--popover-foreground);
+  --color-primary: var(--primary);
+  --color-primary-hover: var(--primary-hover);
+  --color-primary-foreground: var(--primary-foreground);
+  --color-secondary: var(--secondary);
+  --color-secondary-foreground: var(--secondary-foreground);
+  --color-muted: var(--muted);
+  --color-muted-foreground: var(--muted-foreground);
+  --color-accent: var(--accent);
+  --color-accent-foreground: var(--accent-foreground);
+  --color-destructive: var(--destructive);
+  --color-border: var(--border);
+  --color-input: var(--input);
+  --color-ring: var(--ring);
+  --color-chart-1: var(--chart-1);
+  --color-chart-2: var(--chart-2);
+  --color-chart-3: var(--chart-3);
+  --color-chart-4: var(--chart-4);
+  --color-chart-5: var(--chart-5);
+  --color-success: var(--color-success);
+  --color-warning: var(--color-warning);
+  --color-info: var(--color-info);
+  --color-sidebar: var(--sidebar-background);
+  --color-sidebar-foreground: var(--sidebar-foreground);
+  --color-sidebar-primary: var(--sidebar-primary);
+  --color-sidebar-primary-foreground: var(--sidebar-primary-foreground);
+  --color-sidebar-accent: var(--sidebar-accent);
+  --color-sidebar-accent-foreground: var(--sidebar-accent-foreground);
+  --color-sidebar-border: var(--sidebar-border);
+  --color-sidebar-ring: var(--sidebar-ring);
+  --animate-accordion-down: accordion-down 0.2s ease-out;
+  --animate-accordion-up: accordion-up 0.2s ease-out;
+  --animate-fade-in: fade-in 0.3s ease-out;
+  --animate-slide-in-right: slide-in-right 0.3s ease-out;
+  --animate-slide-in-up: slide-in-up 0.3s ease-out;
+  --animate-pulse-soft: pulse-soft 2s ease-in-out infinite;
+
+  @keyframes accordion-down {
+    from { height: 0; }
+    to { height: var(--radix-accordion-content-height); }
+  }
+  @keyframes accordion-up {
+    from { height: var(--radix-accordion-content-height); }
+    to { height: 0; }
+  }
+  @keyframes fade-in {
+    from { opacity: 0; }
+    to { opacity: 1; }
+  }
+  @keyframes slide-in-right {
+    from { transform: translateX(100%); opacity: 0; }
+    to { transform: translateX(0); opacity: 1; }
+  }
+  @keyframes slide-in-up {
+    from { transform: translateY(10px); opacity: 0; }
+    to { transform: translateY(0); opacity: 1; }
+  }
+  @keyframes pulse-soft {
+    0%, 100% { opacity: 1; }
+    50% { opacity: 0.5; }
+  }
+}
+
+@layer base {
+  * {
+    @apply border-border;
+  }
+  body {
+    @apply bg-background text-foreground;
+    font-family: var(--font-sans);
+    -webkit-font-smoothing: antialiased;
+    -moz-osx-font-smoothing: grayscale;
+    overflow: hidden;
+    user-select: none;
+  }
+}
+
+/* Scrollbar styling */
+::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+::-webkit-scrollbar-thumb {
+  background: rgba(255, 255, 255, 0.16);
+  border-radius: 4px;
+  border: 2px solid transparent;
+  background-clip: content-box;
+}
+::-webkit-scrollbar-thumb:hover {
+  background: rgba(255, 255, 255, 0.28);
+  background-clip: content-box;
+}
+
+/* ── 毛玻璃 ── */
+.glass {
+  background: rgba(28, 28, 31, 0.62);
+  backdrop-filter: blur(24px) saturate(180%);
+  -webkit-backdrop-filter: blur(24px) saturate(180%);
+  border: 1px solid rgba(255, 255, 255, 0.10);
+}
+
+.glass-light {
+  background: rgba(28, 28, 31, 0.5);
+  backdrop-filter: blur(12px) saturate(180%);
+  -webkit-backdrop-filter: blur(12px) saturate(180%);
+  border: 1px solid rgba(255, 255, 255, 0.08);
+}
+
+.glass-deep {
+  background: rgba(19, 19, 22, 0.82);
+  backdrop-filter: blur(28px) saturate(180%);
+  -webkit-backdrop-filter: blur(28px) saturate(180%);
+  border: 1px solid rgba(255, 255, 255, 0.06);
+}
+
+/* ── 字标：克制，不用花哨渐变 ── */
+.gradient-text {
+  background: linear-gradient(135deg, #f5f5f7 0%, #c7c7cc 100%);
+  -webkit-background-clip: text;
+  background-clip: text;
+  -webkit-text-fill-color: transparent;
+  background-clip: text;
+}
+
+/* ── 浅色主题：毛玻璃/滚动条/字标 换白底配色 ── */
+[data-theme="light"] .glass {
+  background: rgba(255, 255, 255, 0.72);
+  border: 1px solid rgba(0, 0, 0, 0.10);
+}
+[data-theme="light"] .glass-light {
+  background: rgba(255, 255, 255, 0.6);
+  border: 1px solid rgba(0, 0, 0, 0.08);
+}
+[data-theme="light"] .glass-deep {
+  background: rgba(255, 255, 255, 0.86);
+  border: 1px solid rgba(0, 0, 0, 0.06);
+}
+[data-theme="light"] ::-webkit-scrollbar-thumb {
+  background: rgba(0, 0, 0, 0.22);
+  background-clip: content-box;
+}
+[data-theme="light"] ::-webkit-scrollbar-thumb:hover {
+  background: rgba(0, 0, 0, 0.34);
+  background-clip: content-box;
+}
+[data-theme="light"] .gradient-text {
+  background: linear-gradient(135deg, #1d1d1f 0%, #6e6e73 100%);
+  -webkit-background-clip: text;
+  background-clip: text;
+  -webkit-text-fill-color: transparent;
+  background-clip: text;
+}
+
+/* ── 视频缩略图氛围底（影片标题卡式，无真实封面时的占位） ── */
+.thumb {
+  position: relative;
+  overflow: hidden;
+}
+.thumb-nature {
+  background: radial-gradient(120% 140% at 18% 0%, #2e5f7a 0%, transparent 55%),
+    linear-gradient(155deg, #12334a, #0a1f2e 70%, #07161f);
+}
+.thumb-movie {
+  background: radial-gradient(120% 140% at 78% 8%, #3a4a58 0%, transparent 52%),
+    linear-gradient(150deg, #1c2733, #0d141c 70%, #080d13);
+}
+.thumb-conversation {
+  background: radial-gradient(130% 140% at 30% 0%, #8a6a45 0%, transparent 55%),
+    linear-gradient(150deg, #3a2f22, #1c1610 70%, #120d08);
+}
+.thumb-space {
+  background: radial-gradient(130% 120% at 70% 0%, #5f6b78 0%, transparent 55%),
+    linear-gradient(155deg, #20242e, #10131a 70%, #0a0c12);
+}
+.thumb-animation {
+  background: radial-gradient(130% 140% at 40% 0%, #b98a56 0%, transparent 58%),
+    linear-gradient(150deg, #4a3a28, #23201a 70%, #151210);
+}
+.thumb-city {
+  background: radial-gradient(120% 150% at 80% 0%, #7a3a66 0%, transparent 52%),
+    linear-gradient(155deg, #241b3a, #120d1e 70%, #0b0815);
+}
+.thumb .grain {
+  position: absolute;
+  inset: 0;
+  opacity: 0.14;
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='120' height='120'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.9' numOctaves='2'/%3E%3C/filter%3E%3Crect width='120' height='120' filter='url(%23n)' opacity='0.5'/%3E%3C/svg%3E");
+  mix-blend-mode: overlay;
+}

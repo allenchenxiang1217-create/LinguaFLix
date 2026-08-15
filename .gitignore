@@ -1,0 +1,27 @@
+# Dependencies
+node_modules/
+
+# Build output
+out/
+dist/
+release/
+
+# TypeScript build info
+*.tsbuildinfo
+
+# Logs
+*.log
+npm-debug.log*
+
+# OS
+.DS_Store
+
+# Env / secrets
+.env
+.env.local
+
+# Runtime
+server/.port
+
+# Dictionary build cache (63MB CSV source; built resources/ecdict.db is tracked)
+scripts/.cache/
