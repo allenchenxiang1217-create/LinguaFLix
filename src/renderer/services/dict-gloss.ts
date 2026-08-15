@@ -5,10 +5,11 @@ import { useSettingsStore } from '../stores/settingsStore'
 /**
  * 生词释义拉取 + 缓存（跟随界面语言）。
  *
- * VocabWord 上没有持久化释义字段，这里按需查离线 ECDICT（lookupLocalDict 返回
- * data.zh / data.en 两个 EcdictSense[]），web 模式走 /api/dict/lookup 兜底。结果
- * 先写内存 Map，再落到 localStorage（linguaflix-gloss-v2）。一次查询同时拿到中英
- * /英英两套释义，切换界面语言时直接复用另一套、无需重新请求。
+ * VocabWord 上没有持久化释义字段，这里按需查词，一次查询同时拿到中英 / 英英两套，
+ * 切换界面语言时直接复用另一套、无需重新请求。查词策略是「在线优先 + 离线兜底」：
+ *   - 在线：中英走有道（lookupZhDict IPC / /api/dict/zh 代理），英英走 dictionaryapi.dev；
+ *   - 兜底：在线失败或超时（默认 3s）时，查精简后的离线 ECDICT（lookupLocalDict）。
+ * 结果先写内存 Map，再落到 localStorage（linguaflix-gloss-v2）。
  */
 
 interface EcdictSense { pos?: string; meanings: string[] }
@@ -59,9 +60,22 @@ function extractGloss(senses?: EcdictSense[] | null): string | null {
   return null
 }
 
-async function lookupGloss(key: string): Promise<GlossEntry> {
+const EMPTY_GLOSS: GlossEntry = { zh: null, en: null }
+
+/** 在线查询超时（毫秒）：到点降级离线兜底，避免断网时释义长时间卡住。 */
+const ONLINE_TIMEOUT_MS = 3000
+
+/** 给 Promise 加超时：到点返回 fallback，原 Promise 结果作废（后台继续但被忽略）。 */
+function withTimeout<T>(p: Promise<T>, ms: number, fallback: T): Promise<T> {
+  return Promise.race([
+    p,
+    new Promise<T>((resolve) => { setTimeout(() => resolve(fallback), ms) }),
+  ])
+}
+
+/** 离线兜底：查精简后的 ECDICT（桌面 IPC 或 web /api/dict/lookup），返回 {zh, en} 两套。 */
+async function lookupLocal(key: string): Promise<GlossEntry> {
   const api = (window as any).electronAPI
-  const empty: GlossEntry = { zh: null, en: null }
   try {
     let data: any = null
     if (api?.lookupLocalDict) {
@@ -71,11 +85,58 @@ async function lookupGloss(key: string): Promise<GlossEntry> {
       const r = await apiCall<any>(`/api/dict/lookup?word=${encodeURIComponent(key)}`)
       if (!r.error && r.data) data = r.data
     }
-    if (!data) return empty
+    if (!data) return EMPTY_GLOSS
     return { zh: extractGloss(data.zh), en: extractGloss(data.en) }
   } catch {
-    return empty
+    return EMPTY_GLOSS
   }
+}
+
+/** 有道中英在线：取首个中文释义字符串；失败/超时/无结果返回 null。 */
+async function lookupZhOnline(word: string): Promise<string | null> {
+  const api = (window as any).electronAPI
+  try {
+    const data = await withTimeout<any | null>((async () => {
+      if (api?.lookupZhDict) {
+        const r = await api.lookupZhDict(word)
+        return (!r.error && r.data) ? r.data : null
+      }
+      const r = await apiCall<any>(`/api/dict/zh?word=${encodeURIComponent(word)}`)
+      return (!r.error && r.data) ? r.data : null
+    })(), ONLINE_TIMEOUT_MS, null)
+    const first = data?.translations?.[0]?.meanings?.[0]
+    return typeof first === 'string' && first.trim() ? first.trim() : null
+  } catch {
+    return null
+  }
+}
+
+/** 英英在线（dictionaryapi.dev，经主进程/server 代理规避其偶发 CORS）：取首个 definition；失败/超时返回 null。 */
+async function lookupEnOnline(word: string): Promise<string | null> {
+  const api = (window as any).electronAPI
+  try {
+    const data = await withTimeout<any | null>((async () => {
+      if (api?.lookupEnDict) {
+        const r = await api.lookupEnDict(word)
+        return (!r.error && r.data) ? r.data : null
+      }
+      const r = await apiCall<any>(`/api/dict/en?word=${encodeURIComponent(word)}`)
+      return (!r.error && r.data) ? r.data : null
+    })(), ONLINE_TIMEOUT_MS, null)
+    const first = data?.meanings?.[0]?.definitions?.[0]?.definition
+    return typeof first === 'string' && first.trim() ? first.trim() : null
+  } catch {
+    return null
+  }
+}
+
+/** 查一次词，返回 {zh, en}：中英、英英各自「在线优先，离线兜底」，并行。 */
+async function lookupGloss(key: string): Promise<GlossEntry> {
+  const [zh, en] = await Promise.all([
+    (async () => (await lookupZhOnline(key)) ?? (await lookupLocal(key)).zh)(),
+    (async () => (await lookupEnOnline(key)) ?? (await lookupLocal(key)).en)(),
+  ])
+  return { zh, en }
 }
 
 /** 返回 undefined = 尚未查询；string|null = 已缓存的结果（null 表示无释义）。 */

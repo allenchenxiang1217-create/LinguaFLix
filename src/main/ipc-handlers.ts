@@ -270,6 +270,25 @@ export function registerIpcHandlers(): void {
   })
 
   /**
+   * English-English dictionary lookup (dictionaryapi.dev). Also proxied through
+   * the main process: dictionaryapi.dev's CORS header is intermittent, so the
+   * renderer cannot reliably fetch it directly. Node fetch has no SOP.
+   */
+  ipcMain.handle('dict:lookupEn', async (_event, word: string) => {
+    try {
+      if (!word || typeof word !== 'string') return { error: 'No word provided' }
+      const res = await fetch(`https://api.dictionaryapi.dev/api/v2/entries/en/${encodeURIComponent(word)}`)
+      if (!res.ok) return { error: 'not_found' }
+      const arr = await res.json()
+      const data = Array.isArray(arr) && arr[0] ? arr[0] : null
+      if (!data) return { error: 'not_found' }
+      return { data }
+    } catch (err: any) {
+      return { error: err.message || 'Lookup failed' }
+    }
+  })
+
+  /**
    * Offline dictionary lookup against the bundled ECDICT SQLite DB. Returns both
    * the Chinese translation senses and the English definition senses so the
    * renderer can render either language mode without another round-trip.

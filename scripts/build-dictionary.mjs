@@ -3,10 +3,12 @@
  * Build a compact offline dictionary (resources/ecdict.db) from the ECDICT CSV.
  *
  * ECDICT (https://github.com/skywind3000/ECDICT) is CC-BY-SA licensed. Its full
- * CSV (~63MB, ~770k headwords) is committed to the repo, so we download it once,
- * parse it into a small SQLite table, and drop the bulky columns we don't need
- * (pos/collins/oxford/bnc/frq/detail/audio). The result bundles with the app and
- * powers rich offline EN↔CN and EN↔EN lookups via `node:sqlite`.
+ * CSV (~63MB, ~770k headwords) is downloaded once, then filtered down to just the
+ * exam-tagged headwords (tag != '' → zk/gk/cet4/cet6/ky/toefl/ielts/gre) — ~15k
+ * words instead of 770k — and the bulky columns we don't need are dropped
+ * (pos/collins/oxford/bnc/frq/detail/audio). This shrinks the bundled DB from
+ * ~94MB to a few MB. The trimmed DB serves as the *offline fallback* only; the
+ * primary lookup path is online (有道 / dictionaryapi.dev).
  *
  * Usage: node scripts/build-dictionary.mjs [path-to-ecdict.csv]
  */
@@ -110,6 +112,9 @@ async function main() {
     if (f.length < 11) continue
     const word = f[0]
     if (!word) continue
+    // 只保留考试词汇（tag 非空）。全量 77 万词里 98% 是生僻词/专有名词/地名，
+    // 学习场景用不到；过滤后 ~1.5 万词，DB 从 94MB 压到几 MB，离线兜底足够。
+    if (!(f[7] || '').trim()) continue
     ins.run(word.toLowerCase(), word, f[1], unescapeNl(f[2]), unescapeNl(f[3]), f[10], f[7])
     count++
   }

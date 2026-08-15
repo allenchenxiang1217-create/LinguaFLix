@@ -733,6 +733,24 @@ async function handleRequest(req, res) {
       return;
     }
 
+    // ── API: English-English dictionary (dictionaryapi.dev proxy) ──
+    // dictionaryapi.dev's CORS header is intermittent, so proxy it here (Node
+    // is not subject to the browser SOP). Mirrors Electron's dict:lookupEn.
+    if (req.method === 'GET' && pathname === '/api/dict/en') {
+      const word = parsedUrl.searchParams.get('word') || '';
+      if (!word) { jsonResponse(res, 200, { error: 'No word provided' }); return; }
+      try {
+        const r = await fetch(`https://api.dictionaryapi.dev/api/v2/entries/en/${encodeURIComponent(word)}`);
+        if (!r.ok) { jsonResponse(res, 200, { error: 'not_found' }); return; }
+        const arr = await r.json();
+        const data = Array.isArray(arr) && arr[0] ? arr[0] : null;
+        jsonResponse(res, 200, data ? { data } : { error: 'not_found' });
+      } catch (err) {
+        jsonResponse(res, 200, { error: err.message || 'Lookup failed' });
+      }
+      return;
+    }
+
     // ── Health check ──
     if (req.method === 'GET' && pathname === '/api/health') {
       jsonResponse(res, 200, { status: 'ok', port: PORT });

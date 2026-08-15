@@ -80,6 +80,10 @@ const electronAPI = {
   lookupZhDict: (word: string): Promise<{ data?: any; error?: string }> =>
     ipcRenderer.invoke('dict:lookupZh', word),
 
+  /** English-English dictionary lookup (dictionaryapi.dev), proxied through the main process. */
+  lookupEnDict: (word: string): Promise<{ data?: any; error?: string }> =>
+    ipcRenderer.invoke('dict:lookupEn', word),
+
   /** Offline ECDICT lookup (bundled SQLite) — returns both zh + en senses. */
   lookupLocalDict: (word: string): Promise<{ data?: any; error?: string }> =>
     ipcRenderer.invoke('dict:lookupLocal', word),
