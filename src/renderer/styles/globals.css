@@ -101,6 +101,52 @@
 }
 
 /* ─────────────────────────────────────────────────────────────
+   全屏播放面板强制深色（#3）：
+   播放器悬浮的「批注 / 生词」面板固定在深色视频上，无论外观主题，
+   面板配色始终统一为深色系（浅色主题下不再出现灰字配黑底看不清）。
+   CSS 变量会沿后代继承，因此子树内的所有语义色 token 一并切换。
+   ───────────────────────────────────────────────────────────── */
+.force-dark {
+  color-scheme: dark;
+  --background: #131316;
+  --foreground: #f5f5f7;
+  --card: #1c1c1f;
+  --card-foreground: #f5f5f7;
+  --popover: #1c1c1f;
+  --popover-foreground: #f5f5f7;
+
+  --secondary: #1c1c1f;
+  --secondary-foreground: #f5f5f7;
+  --muted: #1c1c1f;
+  --muted-foreground: #a1a1a6;
+  --accent: #1c1c1f;
+  --accent-foreground: #f5f5f7;
+
+  --destructive: #ff453a;
+  --destructive-foreground: #ffffff;
+
+  --border: rgba(255, 255, 255, 0.10);
+  --input: #1c1c1f;
+  --ring: #0071e3;
+
+  --sidebar-background: #1c1c1f;
+  --sidebar-foreground: #f5f5f7;
+  --sidebar-accent: rgba(255, 255, 255, 0.08);
+  --sidebar-accent-foreground: #f5f5f7;
+  --sidebar-border: rgba(255, 255, 255, 0.10);
+  --sidebar-ring: #0071e3;
+}
+/* 浅色主题下，全屏面板内的滚动条也跟着回白 —— 否则 thumb 深灰配深底看不清。 */
+.force-dark ::-webkit-scrollbar-thumb {
+  background: rgba(255, 255, 255, 0.16);
+  background-clip: content-box;
+}
+.force-dark ::-webkit-scrollbar-thumb:hover {
+  background: rgba(255, 255, 255, 0.28);
+  background-clip: content-box;
+}
+
+/* ─────────────────────────────────────────────────────────────
    accent 主色预设 —— 由 App.tsx 设 <html data-accent="…"> 触发。
    blue 为默认（沿用 :root 现有 token，不重复定义）。
    ───────────────────────────────────────────────────────────── */

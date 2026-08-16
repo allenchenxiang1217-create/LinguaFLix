@@ -1,4 +1,4 @@
-import { useState, useMemo, useRef, useEffect } from 'react'
+import { useState, useMemo, useRef, useEffect, useCallback } from 'react'
 import { createPortal } from 'react-dom'
 import type { SnapshotEntry, VocabWord, OCRRegion } from '@shared/types'
 import { usePlayerStore } from '../../stores/playerStore'
@@ -11,25 +11,16 @@ import { RegionSelectModal } from './RegionSelectModal'
 import { formatTime } from '../../lib/time'
 import { useI18n } from '../../i18n/useI18n'
 import { OCRService } from '../../services/ocr-service'
+import { deleteSnapshotCompletely, deleteWordOccurrenceFromSnapshot } from '../../services/deletion'
+import { findPhrases } from '../../lib/phrases'
+import { portalTarget } from '../../lib/portal'
 import {
   Clock, Play, Pencil, Check, X, Scan, StickyNote, ChevronDown, ChevronRight,
-  Sparkles, BookmarkPlus, Loader2, ZoomIn
+  Sparkles, BookmarkPlus, Loader2, ZoomIn, Trash2, AlertCircle
 } from 'lucide-react'
 
-/** #9 选词涂鸦：按单词稳定映射到旋转色板（同一个词永远同色，相邻词不同色）。 */
-const WORD_COLORS: Array<{ bg: string; fg: string; strong: string }> = [
-  { bg: 'rgba(255,159,10,0.13)', fg: '#ff9f0a', strong: '#b37400' },
-  { bg: 'rgba(52,199,89,0.13)', fg: '#2da44e', strong: '#1f7a37' },
-  { bg: 'rgba(10,132,255,0.13)', fg: '#0a84ff', strong: '#0066cc' },
-  { bg: 'rgba(191,90,242,0.13)', fg: '#bf5af2', strong: '#9a2fd0' },
-  { bg: 'rgba(255,69,58,0.13)', fg: '#ff453a', strong: '#d92e24' },
-  { bg: 'rgba(0,199,190,0.13)', fg: '#00c7be', strong: '#009a93' },
-]
-function wordColor(word: string) {
-  let n = 0
-  for (let i = 0; i < word.length; i++) n = (n + word.charCodeAt(i)) % WORD_COLORS.length
-  return WORD_COLORS[n]
-}
+/** #3 选词交互：不再用「底色涂鸦」，改用下划线高亮——所有可点词带淡色点状下划线
+ *  提示「可以交互」；已保存的生词用橙色实线下划线；选中的词加粗 + 主色实线下划线。 */
 
 interface NoteSnapshotCardProps {
   snapshot: SnapshotEntry
@@ -40,17 +31,16 @@ export function NoteSnapshotCard({ snapshot, noteId }: NoteSnapshotCardProps) {
   const [expanded, setExpanded] = useState(false)
   const [editingText, setEditingText] = useState(false)
   const [editValue, setEditValue] = useState(snapshot.ocrText)
-  const [editingNote, setEditingNote] = useState(false)
-  const [noteValue, setNoteValue] = useState(snapshot.userNote)
   const [showFullImage, setShowFullImage] = useState(false)
   const [showReOCR, setShowReOCR] = useState(false)
   const [reOCRLoading, setReOCRLoading] = useState(false)
   const [reOCRError, setReOCRError] = useState<string | null>(null)
   const [selectedWord, setSelectedWord] = useState<string>('')
   const [showAI, setShowAI] = useState(false)
-  const [wordSaved, setWordSaved] = useState<Record<string, boolean>>({})
   const [editingWordNote, setEditingWordNote] = useState(false)
   const [wordNoteDraft, setWordNoteDraft] = useState('')
+  // #10 删除这张截图：两步确认，级联清理截图缓存 + 该截图的生词
+  const [deleteConfirming, setDeleteConfirming] = useState(false)
 
   const cardRef = useRef<HTMLDivElement>(null)
   const seek = usePlayerStore((s) => s.seek)
@@ -58,9 +48,10 @@ export function NoteSnapshotCard({ snapshot, noteId }: NoteSnapshotCardProps) {
   const pause = usePlayerStore((s) => s.pause)
   const videoHash = usePlayerStore((s) => s.videoHash)
   const subtitles = useSubtitleStore((s) => s.subtitles)
-  const { updateSnapshotText, updateSnapshotNote, updateSnapshotRegion, setOCRResult, addWordToSnapshot, updateSnapshotWordNote } = useNoteStore()
+  const { updateSnapshotText, updateSnapshotRegion, setOCRResult, addWordToSnapshot, updateSnapshotWordNote } = useNoteStore()
   const addWord = useVocabularyStore((s) => s.addWord)
   const updateWordNote = useVocabularyStore((s) => s.updateWordNote)
+  const vocabWords = useVocabularyStore((s) => s.words)
   const isOCRPending = useNoteStore((s) => s.ocrPending[snapshot.id])
   const pauseTimerRef = useRef<number>(0)
   const { t } = useI18n()
@@ -83,16 +74,45 @@ export function NoteSnapshotCard({ snapshot, noteId }: NoteSnapshotCardProps) {
 
   const displaySentence = transcriptContext?.currentText || snapshot.ocrText || ''
 
+  // #9 生词第二色：已保存进单词本的词在句子里用固定橙色标出（单一数据源=vocabularyStore）。
+  const savedWordSet = useMemo(() => {
+    const set = new Set<string>()
+    for (const w of vocabWords) set.add(w.word.toLowerCase())
+    return set
+  }, [vocabWords])
+
+  // #5 词组识别：句子先切成「单词/词组」段，固定搭配渲染成单个可点击 chip（give up / in order to …）。
+  const sentenceSegments = useMemo(() => findPhrases(displaySentence), [displaySentence])
+
+  // #2 自动上滑：把卡片滚到侧栏滚动区上 1/3，醒目且避免被底部工具条/边框遮挡。
+  const scrollToUpperThird = useCallback(() => {
+    const el = cardRef.current
+    if (!el) return
+    const container = el.closest('.overflow-y-auto')
+    if (!container) return
+    const top = el.getBoundingClientRect().top - container.getBoundingClientRect().top + container.scrollTop
+    container.scrollTo({ top: Math.max(0, top - container.clientHeight / 3), behavior: 'smooth' })
+  }, [])
+
+  // 点击卡片头部：展开/收起；展开时自动上滑到上 1/3。
+  const handleHeaderClick = () => {
+    const next = !expanded
+    setExpanded(next)
+    // 必须在 React 提交展开之后才能算目标：折叠时列表 max scroll 还没长高，
+    // 直接 scrollTo 的目标会超出当前 max 被 clamp 回原位，动画形同虚设。
+    if (next) requestAnimationFrame(() => requestAnimationFrame(() => scrollToUpperThird()))
+  }
+
   // Jump to video: play from t-3s to t+3s
   const handleJumpToTime = () => {
-    // #5 播放时自动隐藏字幕挡块，不遮挡画面；快捷键可随时再显示。
-    useSubtitleStore.getState().setBlockerVisible(false)
-    // #8 点击笔记自动上滑：把卡片滚到侧栏滚动区上 1/3，避免被底部工具条遮挡。
-    const container = cardRef.current?.closest('.overflow-y-auto')
-    if (container && cardRef.current) {
-      const top = cardRef.current.getBoundingClientRect().top - container.getBoundingClientRect().top + container.scrollTop
-      container.scrollTo({ top: top - container.clientHeight / 3, behavior: 'smooth' })
-    }
+    // #3 点播放键展开笔记：即便折叠中也能看到内容。
+    setExpanded(true)
+    // #5 播放时自动隐藏字幕挡块，不遮挡画面；#4 记住原可见状态，6 秒自动暂停后还原。
+    const subtitleStore = useSubtitleStore.getState()
+    const wasBlockerVisible = subtitleStore.blockerVisible
+    if (wasBlockerVisible) subtitleStore.setBlockerVisible(false)
+    // #2 点击笔记自动上滑：把卡片滚到侧栏滚动区上 1/3，避免被底部工具条遮挡。
+    requestAnimationFrame(() => requestAnimationFrame(() => scrollToUpperThird()))
     const startTime = Math.max(0, snapshot.timestamp - 3)
     seek(startTime)
     play()
@@ -100,6 +120,7 @@ export function NoteSnapshotCard({ snapshot, noteId }: NoteSnapshotCardProps) {
     clearTimeout(pauseTimerRef.current)
     pauseTimerRef.current = window.setTimeout(() => {
       pause()
+      if (wasBlockerVisible) useSubtitleStore.getState().setBlockerVisible(true)
     }, 6000)
   }
 
@@ -107,12 +128,6 @@ export function NoteSnapshotCard({ snapshot, noteId }: NoteSnapshotCardProps) {
   const handleSaveText = () => {
     updateSnapshotText(snapshot.id, editValue, true)
     setEditingText(false)
-  }
-
-  // Save user note
-  const handleSaveNote = () => {
-    updateSnapshotNote(snapshot.id, noteValue)
-    setEditingNote(false)
   }
 
   // Re-OCR with a newly selected region (from the fullscreen region modal)
@@ -169,10 +184,15 @@ export function NoteSnapshotCard({ snapshot, noteId }: NoteSnapshotCardProps) {
       reviewedAt: null,
       reviewCount: 0,
     }
-    // addWord 返回落库条目（真实 id）；快照副本用同一个 id，单词级批注才能同步。
+    // addWord 返回落库条目（真实 id，且 #7 同词合并后返回已存在的条目）；
+    // 快照副本用同一个 id，单词级批注才能同步。
     const stored = addWord(vocabWord)
     addWordToSnapshot(snapshot.id, stored)
-    setWordSaved((prev) => ({ ...prev, [word]: true }))
+  }
+
+  // #7 内联删除：只删掉该词在本截图里的那条出处（其它截图/视频里的保留）。
+  const handleDeleteSavedWord = (w: VocabWord) => {
+    deleteWordOccurrenceFromSnapshot(w, snapshot.id)
   }
 
   // #10 单词级批注：写入单词本条目 + 快照副本（同 id），闪卡/单词本同步显示。
@@ -185,6 +205,15 @@ export function NoteSnapshotCard({ snapshot, noteId }: NoteSnapshotCardProps) {
     setEditingWordNote(false)
   }
 
+  // #10 删除这张截图：两步确认；级联清理截图缓存 + 该截图保存的生词（删除后卡片卸载）。
+  const handleDeleteSnapshot = () => {
+    if (!deleteConfirming) {
+      setDeleteConfirming(true)
+      return
+    }
+    deleteSnapshotCompletely(noteId, snapshot)
+  }
+
   return (
     <div
       ref={cardRef}
@@ -193,12 +222,12 @@ export function NoteSnapshotCard({ snapshot, noteId }: NoteSnapshotCardProps) {
     >
       {/* Header: thumbnail + timestamp — clicking anywhere in the header expands/collapses */}
       <div
-        onClick={() => setExpanded(!expanded)}
+        onClick={handleHeaderClick}
         className="flex items-center gap-2.5 px-3 py-2.5 cursor-pointer"
       >
         {/* Thumbnail — click to view the full frame */}
         <button
-          onClick={(e) => { e.stopPropagation(); setShowFullImage(true) }}
+          onClick={(e) => { e.stopPropagation(); setExpanded(true); setShowFullImage(true) }}
           title={t('notes.viewFullImage')}
           className="relative w-14 h-9 rounded-lg bg-black/50 border border-border/30 overflow-hidden shrink-0 cursor-pointer group"
         >
@@ -242,7 +271,7 @@ export function NoteSnapshotCard({ snapshot, noteId }: NoteSnapshotCardProps) {
 
         {/* Expand/collapse */}
         <button
-          onClick={(e) => { e.stopPropagation(); setExpanded(!expanded) }}
+          onClick={(e) => { e.stopPropagation(); handleHeaderClick() }}
           className="p-1 rounded-lg hover:bg-secondary transition-colors cursor-pointer"
         >
           {expanded ? <ChevronDown size={14} className="text-muted-foreground" /> : <ChevronRight size={14} className="text-muted-foreground" />}
@@ -314,20 +343,30 @@ export function NoteSnapshotCard({ snapshot, noteId }: NoteSnapshotCardProps) {
                 {t('notes.clickWord')}
               </span>
               <div className="flex flex-wrap gap-1.5">
-                {displaySentence.split(' ').map((w, i) => {
-                  const clean = w.replace(/[^a-zA-Z'-]/g, '')
-                  if (clean.length <= 1) return <span key={i} className="text-[0.9375rem] text-foreground/70 py-0.5">{w} </span>
-                  const c = wordColor(clean)
-                  const isSel = selectedWord === clean
+                {sentenceSegments.map((seg, i) => {
+                  // 单字符 token 保持纯文本（a / I / 连字符等），不做 chip。
+                  if (seg.type === 'word' && seg.text.length <= 1) {
+                    return <span key={i} className="text-[0.9375rem] text-foreground/70 py-0.5">{seg.raw} </span>
+                  }
+                  const isPhrase = seg.type === 'phrase'
+                  const isSel = selectedWord === seg.text
+                  const isSaved = savedWordSet.has(seg.text.toLowerCase())
                   return (
                     <span
                       key={i}
-                      onClick={() => handleWordClick(clean)}
-                      className={`cursor-pointer rounded-lg px-1.5 py-0.5 text-[0.9375rem] leading-[1.35] font-medium
-                        transition-all duration-150 ${isSel ? 'font-semibold shadow-sm' : 'hover:opacity-85'}`}
-                      style={isSel ? { backgroundColor: c.strong, color: '#fff' } : { backgroundColor: c.bg, color: c.fg }}
+                      onClick={() => handleWordClick(seg.text)}
+                      title={isPhrase ? seg.text : undefined}
+                      className={`rounded px-1 py-0.5 text-[0.9375rem] leading-[1.35] font-medium
+                        transition-all duration-150 cursor-pointer underline underline-offset-[3px]
+                        ${isSel
+                          ? 'font-semibold text-primary decoration-solid decoration-primary decoration-2'
+                          : isSaved
+                            ? 'text-[#b37400] decoration-solid decoration-[#ff9f0a] decoration-2'
+                            : isPhrase
+                              ? 'text-foreground/85 decoration-solid decoration-primary/40 decoration-1'
+                              : 'text-foreground/80 decoration-dotted decoration-foreground/25 hover:opacity-85'}`}
                     >
-                      {w}
+                      {seg.raw}
                     </span>
                   )
                 })}
@@ -340,13 +379,14 @@ export function NoteSnapshotCard({ snapshot, noteId }: NoteSnapshotCardProps) {
                     <span className="text-xs font-bold text-foreground">{selectedWord}</span>
                     <button
                       onClick={() => handleSaveWord(selectedWord)}
+                      disabled={savedWordSet.has(selectedWord.toLowerCase())}
                       className={`flex items-center gap-1 px-2 py-0.5 text-[0.625rem] font-semibold rounded-lg transition-all cursor-pointer
-                        ${wordSaved[selectedWord]
+                        ${savedWordSet.has(selectedWord.toLowerCase())
                           ? 'bg-success/15 text-success'
                           : 'bg-primary/15 text-primary hover:bg-primary/25'
-                        }`}
+                        } disabled:cursor-default`}
                     >
-                      {wordSaved[selectedWord] ? (
+                      {savedWordSet.has(selectedWord.toLowerCase()) ? (
                         <><Check size={9} /> {t('notes.saved')}</>
                       ) : (
                         <><BookmarkPlus size={9} /> {t('notes.save')}</>
@@ -382,6 +422,9 @@ export function NoteSnapshotCard({ snapshot, noteId }: NoteSnapshotCardProps) {
                   {(() => {
                     const saved = snapshot.words.find((x) => x.word.toLowerCase() === selectedWord.toLowerCase())
                     if (!saved) return null
+                    // #8 备注单一数据源：以单词本（vocabularyStore）为准，单词本里的编辑能实时反映到视频侧。
+                    const live = vocabWords.find((w) => w.id === saved.id)
+                    const note = live?.userNote ?? saved.userNote
                     return (
                       <div className="pt-1 border-t border-border/20">
                         <div className="flex items-center justify-between mb-1">
@@ -390,7 +433,7 @@ export function NoteSnapshotCard({ snapshot, noteId }: NoteSnapshotCardProps) {
                           </span>
                           {!editingWordNote && (
                             <button
-                              onClick={() => { setWordNoteDraft(saved.userNote || ''); setEditingWordNote(true) }}
+                              onClick={() => { setWordNoteDraft(note || ''); setEditingWordNote(true) }}
                               className="p-1 rounded hover:bg-secondary transition-colors cursor-pointer"
                             >
                               <Pencil size={10} className="text-muted-foreground/50" />
@@ -416,9 +459,9 @@ export function NoteSnapshotCard({ snapshot, noteId }: NoteSnapshotCardProps) {
                               </button>
                             </div>
                           </div>
-                        ) : saved.userNote ? (
+                        ) : note ? (
                           <p className="text-[0.8125rem] text-muted-foreground/70 leading-relaxed bg-background/50 rounded-lg px-2.5 py-1.5">
-                            {saved.userNote}
+                            {note}
                           </p>
                         ) : (
                           <p className="text-[0.625rem] text-muted-foreground/30 italic">{t('notes.noNotes')}</p>
@@ -431,53 +474,7 @@ export function NoteSnapshotCard({ snapshot, noteId }: NoteSnapshotCardProps) {
             </div>
           )}
 
-          {/* User notes */}
-          <div>
-            <div className="flex items-center justify-between mb-1">
-              <span className="flex items-center gap-1 text-[0.625rem] font-semibold uppercase tracking-wider text-muted-foreground/50">
-                <StickyNote size={10} /> {t('layout.notes')}
-              </span>
-              {!editingNote && (
-                <button
-                  onClick={() => { setNoteValue(snapshot.userNote); setEditingNote(true) }}
-                  className="p-1 rounded hover:bg-secondary transition-colors cursor-pointer"
-                >
-                  <Pencil size={10} className="text-muted-foreground/50" />
-                </button>
-              )}
-            </div>
-
-            {editingNote ? (
-              <div className="flex gap-1">
-                <textarea
-                  value={noteValue}
-                  onChange={(e) => setNoteValue(e.target.value)}
-                  placeholder={t('notes.addThoughts')}
-                  className="flex-1 px-2 py-1.5 text-[0.8125rem] rounded-lg bg-background border border-border/50
-                             text-foreground resize-none focus:outline-none focus:border-primary/50 placeholder:text-muted-foreground/30"
-                  rows={2}
-                />
-                <div className="flex flex-col gap-1">
-                  <button onClick={handleSaveNote} className="p-1 rounded bg-success/10 text-success hover:bg-success/20 cursor-pointer">
-                    <Check size={11} />
-                  </button>
-                  <button onClick={() => setEditingNote(false)} className="p-1 rounded bg-secondary text-muted-foreground hover:bg-secondary/80 cursor-pointer">
-                    <X size={11} />
-                  </button>
-                </div>
-              </div>
-            ) : (
-              snapshot.userNote ? (
-                <p className="text-[0.8125rem] text-muted-foreground/75 leading-relaxed bg-background/50 rounded-lg px-2.5 py-1.5">
-                  {snapshot.userNote}
-                </p>
-              ) : (
-                <p className="text-[0.625rem] text-muted-foreground/30 italic">{t('notes.noNotes')}</p>
-              )
-            )}
-          </div>
-
-          {/* Saved words from this snapshot */}
+          {/* Saved words from this snapshot (带内联删除) */}
           {snapshot.words.length > 0 && (
             <div>
               <span className="text-[0.625rem] font-semibold uppercase tracking-wider text-muted-foreground/50 block mb-1">
@@ -485,14 +482,40 @@ export function NoteSnapshotCard({ snapshot, noteId }: NoteSnapshotCardProps) {
               </span>
               <div className="flex flex-wrap gap-1">
                 {snapshot.words.map((w) => (
-                  <span key={w.id} className="px-2 py-0.5 text-[0.6875rem] font-medium rounded-full
+                  <span key={w.id} className="inline-flex items-center gap-1 px-2 py-0.5 text-[0.6875rem] font-medium rounded-full
                                                bg-primary/10 text-primary/80">
                     {w.word}
+                    <button
+                      onClick={() => handleDeleteSavedWord(w)}
+                      title={t('notes.deleteWordHint')}
+                      aria-label={`${t('notes.deleteWord')} ${w.word}`}
+                      className="p-0.5 rounded-full text-primary/50 hover:text-destructive hover:bg-destructive/15 transition-colors cursor-pointer"
+                    >
+                      <X size={9} />
+                    </button>
                   </span>
                 ))}
               </div>
             </div>
           )}
+
+          {/* #10 删除这张截图（两步确认） */}
+          <button
+            onClick={handleDeleteSnapshot}
+            className={`w-full flex items-center justify-center gap-1.5 py-1.5 rounded-lg text-[0.625rem] font-medium
+                        border transition-colors cursor-pointer ${
+                          deleteConfirming
+                            ? 'bg-destructive/15 border-destructive/40 text-destructive'
+                            : 'border-border/40 text-muted-foreground/50 hover:text-destructive hover:border-destructive/30 hover:bg-destructive/5'
+                        }`}
+            title={deleteConfirming ? t('notes.confirmDelete') : t('notes.deleteSnapshotHint')}
+          >
+            {deleteConfirming ? (
+              <><AlertCircle size={11} /> {t('notes.confirmDelete')}</>
+            ) : (
+              <><Trash2 size={11} /> {t('notes.deleteSnapshot')}</>
+            )}
+          </button>
         </div>
       )}
 
@@ -517,7 +540,7 @@ export function NoteSnapshotCard({ snapshot, noteId }: NoteSnapshotCardProps) {
               className="max-w-[92vw] max-h-[88vh] object-contain rounded-lg shadow-2xl shadow-black/60"
             />
           </div>,
-          document.body,
+          portalTarget(),
         )}
 
       {/* ── Fullscreen region re-select modal ── */}

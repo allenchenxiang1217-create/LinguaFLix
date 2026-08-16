@@ -26,6 +26,13 @@ export default defineConfig({
         target: 'http://127.0.0.1:5176',
         changeOrigin: true,
       },
+      // Same-origin proxy for the HTTP backend (dictionary, screenshots, AI stream,
+      // video upload). Without this, fetch('/api/...') hits the SPA fallback and
+      // returns index.html instead of JSON — every backend call would break.
+      '/api': {
+        target: 'http://127.0.0.1:5176',
+        changeOrigin: true,
+      },
     },
   },
 })

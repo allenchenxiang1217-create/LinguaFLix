@@ -30,6 +30,8 @@ interface ReviewActions {
   incRemembered: () => void
   setReturnToReview: (v: boolean) => void
   reset: () => void
+  /** #4 闪卡 AI 分析：把流式结果写回队列快照，当前卡实时显示（不持久化，落库走 vocabularyStore）。 */
+  setWordAnalysis: (id: string, aiAnalysis: string) => void
 }
 
 export const useReviewStore = create<ReviewState & ReviewActions>((set) => ({
@@ -57,5 +59,7 @@ export const useReviewStore = create<ReviewState & ReviewActions>((set) => ({
   setFlipped: (flipped) => set({ flipped }),
   incRemembered: () => set((s) => ({ remembered: s.remembered + 1 })),
   setReturnToReview: (returnToReview) => set({ returnToReview }),
+  setWordAnalysis: (id, aiAnalysis) =>
+    set((s) => ({ queue: s.queue.map((w) => (w.id === id ? { ...w, aiAnalysis } : w)) })),
   reset: () => set({ mode: 'list', queue: [], idx: 0, flipped: false, remembered: 0, done: false, returnToReview: false }),
 }))

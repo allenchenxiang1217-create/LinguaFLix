@@ -1,6 +1,6 @@
 import { ipcMain, dialog } from 'electron'
-import { readFileSync, writeFileSync, mkdirSync } from 'fs'
-import { join, basename } from 'path'
+import { readFileSync, writeFileSync, mkdirSync, unlinkSync } from 'fs'
+import { join, basename, sep, resolve } from 'path'
 import { app } from 'electron'
 import { DatabaseSync } from 'node:sqlite'
 import { YtDlpManager } from './ytdlp-manager'
@@ -141,6 +141,20 @@ export function registerIpcHandlers(): void {
   ipcMain.handle('screenshot:read', async (_event, filePath: string) => {
     const data = readFileSync(filePath)
     return `data:image/png;base64,${data.toString('base64')}`
+  })
+
+  // Delete a screenshot PNG (only inside the screenshots dir — defend traversal).
+  ipcMain.handle('screenshot:delete', async (_event, filePath: string) => {
+    try {
+      const userDataPath = app.getPath('userData')
+      const screenshotsDir = join(userDataPath, 'screenshots')
+      const resolvedPath = resolve(filePath)
+      if (!resolvedPath.startsWith(screenshotsDir + sep)) return false
+      unlinkSync(resolvedPath)
+      return true
+    } catch {
+      return false
+    }
   })
 
   // ── Stream Resolution (yt-dlp) ──

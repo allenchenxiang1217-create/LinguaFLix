@@ -1,12 +1,17 @@
-import { useEffect, useMemo, useRef, useState } from 'react'
-import { useVocabularyStore } from '../../stores/vocabularyStore'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { useVocabularyStore, occurrencesOf } from '../../stores/vocabularyStore'
 import { useReviewStore } from '../../stores/reviewStore'
 import { useAppStore } from '../../stores/appStore'
 import { useWordGlosses } from '../../services/dict-gloss'
 import { getSnapshotImage, readSnapshotImage } from '../../services/storage-service'
 import { formatTime } from '../../lib/time'
 import { useI18n } from '../../i18n/useI18n'
-import { BookOpen, CheckCircle2, Clock, Image as ImageIcon, Layers, Play, RotateCcw, Sparkles, X } from 'lucide-react'
+import { BookOpen, CheckCircle2, Clock, Image as ImageIcon, Layers, Loader2, Play, RotateCcw, Sparkles, Trash2, X } from 'lucide-react'
+import { deleteWordCompletely } from '../../services/deletion'
+import { getProvider, normalizeBaseUrl } from '../../services/ai-providers'
+import { streamOpenAI, streamClaude } from '../../services/ai-stream'
+import { useSettingsStore } from '../../stores/settingsStore'
+import { ConfirmDialog } from '../ui/ConfirmDialog'
 import type { VocabWord } from '@shared/types'
 
 interface ReviewQueueProps {
@@ -18,8 +23,10 @@ interface ReviewQueueProps {
   onOpenNotes: () => void
 }
 
-/** 生词列表的列：截图缩略图 | 生词+释义 | 状态 | 下次复习 | 视频。 */
-const COLS = 'grid grid-cols-[60px_minmax(0,1fr)_96px_88px_112px] items-center gap-3'
+/** 生词列表的列：多选框 | 截图缩略图 | 生词+释义 | 备注（可编辑） | 状态 | 下次复习 | 视频。 */
+const COLS = 'grid grid-cols-[28px_60px_minmax(0,1.1fr)_minmax(0,1fr)_96px_88px_112px] items-center gap-3'
+/** #8 未进入「选择」模式时不显示多选框，去掉首列 28px。 */
+const COLS_NO_SELECT = 'grid grid-cols-[60px_minmax(0,1.1fr)_minmax(0,1fr)_96px_88px_112px] items-center gap-3'
 
 /** 展开详情里的一行：左侧 label + 右侧文本（可换行）。 */
 function DetailRow({ label, text }: { label: string; text: string }) {
@@ -31,9 +38,52 @@ function DetailRow({ label, text }: { label: string; text: string }) {
   )
 }
 
+type TranslateFn = (key: string, vars?: Record<string, string | number>) => string
+
+/** 截图放大遮罩：列表缩略图与闪卡背面缩略图共用。 */
+function LightboxOverlay({
+  lightbox,
+  onClose,
+  t,
+}: {
+  lightbox: { dataUrl: string; word: string } | null
+  onClose: () => void
+  t: TranslateFn
+}) {
+  if (!lightbox) return null
+  return (
+    <div
+      className="fixed inset-0 z-[100] bg-black/70 backdrop-blur-sm grid place-items-center p-8"
+      onClick={onClose}
+    >
+      <div
+        className="max-w-3xl w-full rounded-2xl overflow-hidden border border-border/60 bg-card shadow-2xl"
+        onClick={(e) => e.stopPropagation()}
+      >
+        <img
+          src={lightbox.dataUrl}
+          alt={lightbox.word}
+          className="w-full max-h-[68vh] object-contain bg-black"
+        />
+        <div className="flex items-center justify-between px-4 py-3">
+          <p className="text-sm font-semibold text-foreground">{lightbox.word}</p>
+          <button
+            onClick={onClose}
+            className="inline-flex items-center gap-1 h-8 px-3 rounded-lg text-xs font-medium
+                       text-muted-foreground hover:bg-foreground/5 hover:text-foreground transition-colors cursor-pointer"
+          >
+            <X size={14} /> {t('review.collapse')}
+          </button>
+        </div>
+      </div>
+    </div>
+  )
+}
+
 export function ReviewQueue({ search, onOpenVideoAt, onOpenNotes }: ReviewQueueProps) {
   const words = useVocabularyStore((s) => s.words)
   const reviewWord = useVocabularyStore((s) => s.reviewWord)
+  const updateWordNote = useVocabularyStore((s) => s.updateWordNote)
   const { t } = useI18n()
 
   // 复习会话状态放 reviewStore：跳到播放器（Dashboard 卸载）再返回时原样恢复。
@@ -47,6 +97,52 @@ export function ReviewQueue({ search, onOpenVideoAt, onOpenNotes }: ReviewQueueP
 
   const [toast, setToast] = useState<string | null>(null)
   const toastTimer = useRef<number | null>(null)
+
+  // #4 闪卡 AI 分析：按下「AI 分析」按键才开始流式分析，结果写回该词。
+  const [aiBusy, setAiBusy] = useState(false)
+  const [aiError, setAiError] = useState<string | null>(null)
+  const aiAbortRef = useRef<AbortController | null>(null)
+
+  const analyzeWord = useCallback(async (w: VocabWord) => {
+    const st = useSettingsStore.getState()
+    const p = getProvider(st.aiProvider)
+    const ov = st.aiOverrides[p.id] ?? {}
+    const apiKey = ov.apiKey ?? ''
+    const baseUrl = normalizeBaseUrl(ov.baseUrl || p.baseUrl)
+    if (!apiKey) { setAiError(t('ai.needKey')); return }
+    if (!st.aiModel.trim()) { setAiError(t('ai.needModel')); return }
+
+    aiAbortRef.current?.abort()
+    const controller = new AbortController()
+    aiAbortRef.current = controller
+    setAiBusy(true); setAiError(null)
+
+    let acc = ''
+    const opts = {
+      word: w.word,
+      sentence: w.contextSentence || w.word,
+      ctxBefore: '',
+      ctxAfter: '',
+      onChunk: (c: string) => {
+        // 流式 delta 累积后实时写入队列快照，当前卡背面即时显示；最终落库走 vocabularyStore。
+        acc += c
+        useReviewStore.getState().setWordAnalysis(w.id, acc)
+      },
+      signal: controller.signal,
+      language: st.language,
+      t,
+    }
+    try {
+      if (p.type === 'openai') await streamOpenAI(baseUrl, apiKey, st.aiModel.trim(), opts)
+      else await streamClaude(baseUrl, apiKey, st.aiModel.trim(), opts)
+      useVocabularyStore.getState().setWordAiAnalysis(w.id, acc)
+    } catch (err: any) {
+      if (err.name !== 'AbortError') setAiError(err.message || t('ai.failed'))
+    } finally {
+      setAiBusy(false)
+      if (aiAbortRef.current === controller) aiAbortRef.current = null
+    }
+  }, [t])
 
   const now = new Date().toISOString()
   const dueCount = words.filter((w) => w.sm2.dueDate <= now).length
@@ -73,6 +169,17 @@ export function ReviewQueue({ search, onOpenVideoAt, onOpenNotes }: ReviewQueueP
       )
     : sorted
 
+  // 待复习/已掌握 分类过滤（all | due | mastered）
+  const [reviewFilter, setReviewFilter] = useState<'all' | 'due' | 'mastered'>('all')
+
+  // 待复习/已掌握 分类过滤：在搜索/排序之后、分组之前应用。
+  const categoryFiltered =
+    reviewFilter === 'due'
+      ? filtered.filter((w) => w.sm2.dueDate <= now)
+      : reviewFilter === 'mastered'
+        ? filtered.filter((w) => (w.sm2?.repetition ?? 0) >= 3)
+        : filtered
+
   // 顶部三统计（与列表展示同源，直接从 words 推导）
   const masteredCount = words.filter((w) => (w.sm2?.repetition ?? 0) >= 3).length
   const totalDays = useMemo(() => {
@@ -88,11 +195,89 @@ export function ReviewQueue({ search, onOpenVideoAt, onOpenNotes }: ReviewQueueP
   const [groupByVideo, setGroupByVideo] = useState(false)
   const [expandedId, setExpandedId] = useState<string | null>(null)
   const [lightbox, setLightbox] = useState<{ dataUrl: string; word: string } | null>(null)
+  // 备注列行内编辑：记录正在编辑的词 id + 草稿。
+  const [editingNoteId, setEditingNoteId] = useState<string | null>(null)
+  const [noteDraft, setNoteDraft] = useState('')
+  // #1 删除生词：确认悬浮窗（删除不可撤销，级联清理快照副本 + 孤儿截图缓存）
+  const [pendingDelete, setPendingDelete] = useState<VocabWord | null>(null)
+  // #2 删除多选：勾选多个单词批量删除（选中集合 + 批量删除确认）。
+  const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set())
+  const [pendingBulkDelete, setPendingBulkDelete] = useState(false)
+  // #8 多选框默认隐藏，点「选择」后才显示（勾选框不常态化显现）。
+  const [selectMode, setSelectMode] = useState(false)
+  const exitSelectMode = () => { setSelectMode(false); setSelectedIds(new Set()) }
+  // #3 缩略图兜底：localStorage 缩略图缺失时，异步从磁盘读全尺寸补上（snapshotId → dataUrl）。
+  const [resolvedThumbs, setResolvedThumbs] = useState<Record<string, string>>({})
+  const resolvedThumbsRef = useRef<Record<string, string>>({})
+  const attemptedThumbsRef = useRef<Set<string>>(new Set())
+
+  useEffect(() => {
+    let cancelled = false
+    // #7 合并后一个词可能跨多张截图：解析主出处 + 全部其它出处的缩略图。
+    const pending: Array<{ snapshotId: string; videoHash: string }> = []
+    for (const w of filtered) {
+      if (w.snapshotId) pending.push({ snapshotId: w.snapshotId, videoHash: w.videoHash })
+      for (const o of occurrencesOf(w)) {
+        if (o.snapshotId && o.snapshotId !== w.snapshotId) {
+          pending.push({ snapshotId: o.snapshotId, videoHash: o.videoHash })
+        }
+      }
+    }
+    for (const { snapshotId, videoHash } of pending) {
+      if (attemptedThumbsRef.current.has(snapshotId)) continue
+      attemptedThumbsRef.current.add(snapshotId)
+      if (getSnapshotImage(snapshotId)) continue
+      readSnapshotImage(snapshotId, videoHash).then((full) => {
+        if (cancelled || !full) return
+        if (resolvedThumbsRef.current[snapshotId]) return
+        resolvedThumbsRef.current[snapshotId] = full
+        setResolvedThumbs((prev) => ({ ...prev, [snapshotId]: full }))
+      })
+    }
+    return () => { cancelled = true }
+  }, [filtered])
+
+  const saveNote = (id: string) => {
+    updateWordNote(id, noteDraft.trim())
+    setEditingNoteId(null)
+  }
+
+  /** #1 删除生词：确认悬浮窗；级联清理快照副本 + 孤儿截图缓存。 */
+  const confirmDeleteWord = () => {
+    if (!pendingDelete) return
+    const w = pendingDelete
+    setPendingDelete(null)
+    deleteWordCompletely({ id: w.id, snapshotId: w.snapshotId, videoHash: w.videoHash })
+  }
+
+  // ── #2 删除多选 ──
+  const toggleSelect = (id: string) => {
+    setSelectedIds((prev) => {
+      const next = new Set(prev)
+      if (next.has(id)) next.delete(id)
+      else next.add(id)
+      return next
+    })
+  }
+
+  const toggleSelectAll = () => {
+    setSelectedIds((prev) => {
+      if (prev.size === categoryFiltered.length && categoryFiltered.length > 0) return new Set<string>()
+      return new Set(categoryFiltered.map((w) => w.id))
+    })
+  }
+
+  const confirmBulkDelete = async () => {
+    const targets = words.filter((w) => selectedIds.has(w.id))
+    await Promise.all(targets.map((w) => deleteWordCompletely({ id: w.id, snapshotId: w.snapshotId, videoHash: w.videoHash })))
+    setSelectedIds(new Set())
+    setPendingBulkDelete(false)
+  }
 
   const grouped = useMemo(() => {
     if (!groupByVideo) return null
     const map = new Map<string, VocabWord[]>()
-    for (const w of filtered) {
+    for (const w of categoryFiltered) {
       const arr = map.get(w.videoHash) ?? []
       arr.push(w)
       map.set(w.videoHash, arr)
@@ -102,12 +287,27 @@ export function ReviewQueue({ search, onOpenVideoAt, onOpenNotes }: ReviewQueueP
       const tb = videos[b[0]]?.lastOpenedAt ?? 0
       return tb - ta
     })
-  }, [filtered, groupByVideo, videos])
+  }, [categoryFiltered, groupByVideo, videos])
 
   /** 点缩略图放大：有 filePath 从磁盘读全尺寸，否则回退 localStorage 缩略图。 */
   const openLightbox = async (w: VocabWord) => {
     const full = w.snapshotId ? await readSnapshotImage(w.snapshotId, w.videoHash) : null
     if (full) setLightbox({ dataUrl: full, word: w.word })
+  }
+
+  /** 点某条出处的缩略图放大（#7 合并后一个词可跨多帧）。 */
+  const openLightboxAt = async (snapshotId: string, videoHash: string, word: string) => {
+    const full = snapshotId ? await readSnapshotImage(snapshotId, videoHash) : null
+    if (full) setLightbox({ dataUrl: full, word })
+  }
+
+  /** #7 封面出处：最早、且视频仍存在的出处（否则回退主字段）。 */
+  const coverOcc = (w: VocabWord): { snapshotId: string; videoHash: string } => {
+    const occs = [...occurrencesOf(w)].sort((a, b) => a.createdAt - b.createdAt)
+    for (const o of occs) {
+      if (o.snapshotId && o.videoHash && videos[o.videoHash]) return o
+    }
+    return { snapshotId: w.snapshotId, videoHash: w.videoHash }
   }
 
   /** 生词行：缩略图可点放大、视频按钮醒目、点击行任意处展开完整释义/原句/AI/备注。 */
@@ -116,21 +316,37 @@ export function ReviewQueue({ search, onOpenVideoAt, onOpenNotes }: ReviewQueueP
       {list.map((w) => {
         const isDue = w.sm2.dueDate <= now
         const gloss = glosses[w.word.toLowerCase()] ?? ''
-        const thumb = w.snapshotId ? getSnapshotImage(w.snapshotId) : null
+        // #7 合并：按记录时间排序的出处 + 被记录次数（跨视频/跨帧）。
+        const occs = [...occurrencesOf(w)].sort((a, b) => a.createdAt - b.createdAt)
+        const count = w.recordCount ?? occs.length
+        const co = coverOcc(w)
+        const thumb = co.snapshotId ? (getSnapshotImage(co.snapshotId) || resolvedThumbs[co.snapshotId] || null) : null
         const isOpen = expandedId === w.id
         return (
           <div key={w.id} className="border-t border-border/40">
             <div
               onClick={() => setExpandedId(isOpen ? null : w.id)}
-              className={`${COLS} px-4 py-3 transition-colors hover:bg-foreground/5 cursor-pointer`}
+              className={`${selectMode ? COLS : COLS_NO_SELECT} px-4 py-3 transition-colors hover:bg-foreground/5 cursor-pointer`}
               role="button"
               aria-expanded={isOpen}
             >
+              {/* #2 多选框（#8 仅「选择」模式下显示） */}
+              {selectMode && (
+                <span className="justify-self-center" onClick={(e) => e.stopPropagation()}>
+                  <input
+                    type="checkbox"
+                    checked={selectedIds.has(w.id)}
+                    onChange={() => toggleSelect(w.id)}
+                    aria-label={`${t('review.colWord')} ${w.word}`}
+                    className="h-3.5 w-3.5 cursor-pointer accent-primary"
+                  />
+                </span>
+              )}
               {/* 截图缩略图：点按放大 */}
               <button
                 onClick={(e) => {
                   e.stopPropagation()
-                  if (thumb) openLightbox(w)
+                  if (thumb) openLightboxAt(co.snapshotId, co.videoHash, w.word)
                 }}
                 className="w-[52px] h-[38px] rounded-lg overflow-hidden border border-border/40 bg-foreground/5 shrink-0 cursor-pointer"
                 aria-label={`${t('review.colSnapshot')} · ${w.word}`}
@@ -144,13 +360,50 @@ export function ReviewQueue({ search, onOpenVideoAt, onOpenNotes }: ReviewQueueP
                 )}
               </button>
               <div className="min-w-0">
-                <p className="text-[1.0625rem] font-semibold leading-[1.3] text-foreground truncate">
-                  {w.word}
-                </p>
+                <div className="flex items-center gap-1.5 min-w-0">
+                  <p className="text-[1.0625rem] font-semibold leading-[1.3] text-foreground truncate">
+                    {w.word}
+                  </p>
+                  {count > 1 && (
+                    <span className="shrink-0 inline-flex items-center h-[18px] px-1.5 rounded-full text-[0.625rem] font-semibold text-primary bg-primary/10">
+                      {t('review.recordedTimes', { n: count })}
+                    </span>
+                  )}
+                </div>
                 <p className="text-[0.8125rem] text-muted-foreground mt-0.5 truncate">
                   {gloss || ' '}
                 </p>
               </div>
+              {/* 备注列：点击进入行内编辑（Enter/blur 保存，Esc 取消） */}
+              <span className="min-w-0" onClick={(e) => e.stopPropagation()}>
+                {editingNoteId === w.id ? (
+                  <input
+                    autoFocus
+                    value={noteDraft}
+                    onChange={(e) => setNoteDraft(e.target.value)}
+                    onBlur={() => saveNote(w.id)}
+                    onKeyDown={(e) => {
+                      if (e.key === 'Enter') saveNote(w.id)
+                      else if (e.key === 'Escape') setEditingNoteId(null)
+                    }}
+                    placeholder={t('review.addNote')}
+                    className="w-full h-8 px-2.5 rounded-lg bg-background/60 border border-primary/40 text-[0.8125rem]
+                               text-foreground focus:outline-none focus:ring-2 focus:ring-primary/30 placeholder:text-muted-foreground/40"
+                  />
+                ) : (
+                  <button
+                    onClick={(e) => { e.stopPropagation(); setEditingNoteId(w.id); setNoteDraft(w.userNote || '') }}
+                    className={`w-full max-w-full text-left h-8 px-2.5 rounded-lg border text-[0.8125rem] truncate transition-colors cursor-pointer
+                      ${w.userNote
+                        ? 'text-foreground/85 border-transparent hover:border-border/60 hover:bg-foreground/5'
+                        : 'text-muted-foreground/45 border-dashed border-border/50 hover:text-muted-foreground hover:border-border'
+                      }`}
+                    title={w.userNote || t('review.addNote')}
+                  >
+                    {w.userNote || t('review.addNote')}
+                  </button>
+                )}
+              </span>
               <span className="min-w-0">
                 {isDue && (
                   <span className="inline-flex h-[22px] items-center px-2.5 rounded-full text-xs font-semibold
@@ -166,7 +419,7 @@ export function ReviewQueue({ search, onOpenVideoAt, onOpenNotes }: ReviewQueueP
               >
                 {formatNextReview(w)}
               </span>
-              <span className="justify-self-end">
+              <span className="justify-self-end flex items-center gap-1 shrink-0">
                 <button
                   onClick={(e) => {
                     e.stopPropagation()
@@ -181,17 +434,69 @@ export function ReviewQueue({ search, onOpenVideoAt, onOpenNotes }: ReviewQueueP
                     {formatTime(w.videoTimestamp)}
                   </span>
                 </button>
+                {/* #1 删除生词：确认悬浮窗 */}
+                <button
+                  onClick={(e) => {
+                    e.stopPropagation()
+                    setPendingDelete(w)
+                  }}
+                  title={t('notes.deleteWordHint')}
+                  className="inline-flex items-center justify-center w-7 h-8 rounded-lg transition-colors cursor-pointer text-muted-foreground/35 hover:text-destructive hover:bg-destructive/10"
+                  aria-label={t('notes.deleteWord')}
+                >
+                  <Trash2 size={12} />
+                </button>
               </span>
             </div>
 
-            {/* 展开详情：完整释义 / 原句 / AI 分析 / 我的笔记 */}
+            {/* 展开详情：完整释义 / 原句 / AI 分析 / 我的笔记 / 多出处 */}
             {isOpen && (
               <div className="px-4 pb-4">
                 <div className="pl-[60px] space-y-2.5">
                   <DetailRow label={t('review.colGloss')} text={gloss || w.contextSentence} />
                   <DetailRow label={t('review.colContext')} text={w.contextSentence} />
                   {w.aiAnalysis && <DetailRow label={t('review.colAi')} text={w.aiAnalysis} />}
-                  {w.userNote && <DetailRow label={t('review.colNote')} text={w.userNote} />}
+                  {/* #7 多出处：同词跨视频/跨帧的记录，各自可放大截图 + 跳转 */}
+                  {occs.length > 1 && (
+                    <div className="pt-2.5 border-t border-border/40">
+                      <p className="text-xs font-medium text-muted-foreground/70 mb-2">
+                        {t('review.occurrences', { n: occs.length })}
+                      </p>
+                      <div className="space-y-1.5">
+                        {occs.map((o, i) => {
+                          const oThumb = o.snapshotId ? (getSnapshotImage(o.snapshotId) || resolvedThumbs[o.snapshotId] || null) : null
+                          const oName = videos[o.videoHash]?.fileName ?? o.videoHash ?? ''
+                          return (
+                            <div key={`${o.snapshotId}-${o.videoTimestamp}-${i}`} className="flex items-center gap-2.5">
+                              <span className="text-xs font-semibold text-muted-foreground/50 tabular-nums w-5 shrink-0">#{i + 1}</span>
+                              <button
+                                onClick={() => { if (oThumb) openLightboxAt(o.snapshotId, o.videoHash, w.word) }}
+                                className="w-[52px] h-[34px] rounded-md overflow-hidden border border-border/40 bg-foreground/5 shrink-0 cursor-pointer"
+                                aria-label={`${t('review.colSnapshot')} · ${w.word}`}
+                              >
+                                {oThumb ? (
+                                  <img src={oThumb} alt={w.word} className="w-full h-full object-cover" />
+                                ) : (
+                                  <span className="w-full h-full grid place-items-center text-muted-foreground/40">
+                                    <ImageIcon size={13} />
+                                  </span>
+                                )}
+                              </button>
+                              <span className="text-[0.75rem] font-mono text-muted-foreground tabular-nums shrink-0">{formatTime(o.videoTimestamp)}</span>
+                              <span className="text-xs text-muted-foreground truncate min-w-0">{oName}</span>
+                              <button
+                                onClick={() => openVideoFromReview(o.videoHash, o.videoTimestamp)}
+                                className="ml-auto inline-flex items-center gap-1 h-7 px-2.5 rounded-lg bg-primary/10 text-primary hover:bg-primary hover:text-white transition-colors cursor-pointer shrink-0"
+                                aria-label={`${t('review.watchVideo')} ${w.word}`}
+                              >
+                                <Play size={12} />
+                              </button>
+                            </div>
+                          )
+                        })}
+                      </div>
+                    </div>
+                  )}
                 </div>
               </div>
             )}
@@ -238,6 +543,18 @@ export function ReviewQueue({ search, onOpenVideoAt, onOpenNotes }: ReviewQueueP
 
   const cur = mode === 'review' ? queue[idx] ?? null : null
   const progress = done ? queue.length : Math.min(idx + 1, queue.length)
+
+  // 切词/退出时重置 AI 状态，并取消仍在进行中的请求。
+  useEffect(() => {
+    setAiBusy(false)
+    setAiError(null)
+    aiAbortRef.current?.abort()
+    aiAbortRef.current = null
+    return () => {
+      aiAbortRef.current?.abort()
+      aiAbortRef.current = null
+    }
+  }, [cur?.id])
   const progressPct = queue.length ? (progress / queue.length) * 100 : 0
 
   // 闪卡键盘评分：仅复习模式 + 已翻面时生效（← 忘了 / ↓ 模糊 / → 记住了）。
@@ -318,6 +635,13 @@ export function ReviewQueue({ search, onOpenVideoAt, onOpenNotes }: ReviewQueueP
               {t('review.noMatch', { q: search.trim() })}
             </p>
           </div>
+        ) : categoryFiltered.length === 0 ? (
+          /* 分类过滤无结果 */
+          <div className="rounded-2xl border border-border/50 bg-card/60 p-10 text-center">
+            <p className="text-[0.9375rem] font-semibold text-foreground">
+              {t('review.noWordsFound')}
+            </p>
+          </div>
         ) : (
           <div className="rounded-2xl border border-border/50 bg-card/60 overflow-hidden">
             {/* 顶部三统计：待复习 / 已掌握 / 累计天数 */}
@@ -339,36 +663,103 @@ export function ReviewQueue({ search, onOpenVideoAt, onOpenNotes }: ReviewQueueP
               ))}
             </div>
 
-            {/* 筛选切换：按时间顺序 / 按视频分组 */}
-            <div className="flex items-center gap-1 px-4 pt-3 pb-1">
+            {/* 筛选切换：分类（全部/待复习/已掌握）+ 分组（时间/视频） */}
+            <div className="flex items-center justify-between gap-2 px-4 pt-3 pb-1">
               <div className="inline-flex rounded-lg bg-foreground/5 border border-border/50 p-0.5">
+                {(['all', 'due', 'mastered'] as const).map((f) => (
+                  <button
+                    key={f}
+                    onClick={() => setReviewFilter(f)}
+                    className={`inline-flex items-center gap-1.5 h-7 px-3 rounded-md text-xs font-medium transition-colors cursor-pointer ${
+                      reviewFilter === f
+                        ? 'bg-card text-foreground shadow-sm'
+                        : 'text-muted-foreground hover:text-foreground'
+                    }`}
+                  >
+                    {f === 'all'
+                      ? t('review.filterAll')
+                      : f === 'due'
+                        ? t('review.filterDue')
+                        : t('review.filterMastered')}
+                  </button>
+                ))}
+              </div>
+              <div className="flex items-center gap-2">
+                <div className="inline-flex rounded-lg bg-foreground/5 border border-border/50 p-0.5">
+                  <button
+                    onClick={() => setGroupByVideo(false)}
+                    className={`inline-flex items-center gap-1.5 h-7 px-3 rounded-md text-xs font-medium transition-colors cursor-pointer ${
+                      !groupByVideo
+                        ? 'bg-card text-foreground shadow-sm'
+                        : 'text-muted-foreground hover:text-foreground'
+                    }`}
+                  >
+                    <Clock size={13} /> {t('review.groupByTime')}
+                  </button>
+                  <button
+                    onClick={() => setGroupByVideo(true)}
+                    className={`inline-flex items-center gap-1.5 h-7 px-3 rounded-md text-xs font-medium transition-colors cursor-pointer ${
+                      groupByVideo
+                        ? 'bg-card text-foreground shadow-sm'
+                        : 'text-muted-foreground hover:text-foreground'
+                    }`}
+                  >
+                    <Layers size={13} /> {t('review.groupByVideo')}
+                  </button>
+                </div>
+                {/* #8 选择按钮：勾选框默认隐藏，点它进入多选模式 */}
                 <button
-                  onClick={() => setGroupByVideo(false)}
-                  className={`inline-flex items-center gap-1.5 h-7 px-3 rounded-md text-xs font-medium transition-colors cursor-pointer ${
-                    !groupByVideo
-                      ? 'bg-card text-foreground shadow-sm'
-                      : 'text-muted-foreground hover:text-foreground'
+                  onClick={() => (selectMode ? exitSelectMode() : setSelectMode(true))}
+                  className={`inline-flex items-center gap-1.5 h-7 px-3 rounded-md text-xs font-medium transition-colors cursor-pointer border ${
+                    selectMode
+                      ? 'bg-primary/10 border-primary/40 text-primary'
+                      : 'bg-foreground/5 border-border/50 text-muted-foreground hover:text-foreground'
                   }`}
                 >
-                  <Clock size={13} /> {t('review.groupByTime')}
-                </button>
-                <button
-                  onClick={() => setGroupByVideo(true)}
-                  className={`inline-flex items-center gap-1.5 h-7 px-3 rounded-md text-xs font-medium transition-colors cursor-pointer ${
-                    groupByVideo
-                      ? 'bg-card text-foreground shadow-sm'
-                      : 'text-muted-foreground hover:text-foreground'
-                  }`}
-                >
-                  <Layers size={13} /> {t('review.groupByVideo')}
+                  {selectMode ? t('review.exitSelect') : t('review.select')}
                 </button>
               </div>
             </div>
 
+            {/* #2 删除多选：选中时出现的批量操作条（#8 仅「选择」模式下显示） */}
+            {selectMode && selectedIds.size > 0 && (
+              <div className="flex items-center justify-between gap-3 px-4 py-2.5 bg-primary/10 border-t border-b border-primary/20">
+                <span className="text-xs font-medium text-primary">
+                  {t('review.selectedCount', { n: selectedIds.size })}
+                </span>
+                <div className="flex items-center gap-2">
+                  <button
+                    onClick={() => setSelectedIds(new Set())}
+                    className="h-8 px-3 rounded-lg text-xs font-medium text-muted-foreground hover:bg-foreground/10 hover:text-foreground transition-colors cursor-pointer"
+                  >
+                    {t('notes.confirm.cancel')}
+                  </button>
+                  <button
+                    onClick={() => setPendingBulkDelete(true)}
+                    className="h-8 px-3 rounded-lg text-xs font-medium bg-destructive hover:bg-destructive/90 text-white transition-colors cursor-pointer"
+                  >
+                    {t('review.deleteSelected')}
+                  </button>
+                </div>
+              </div>
+            )}
+
             {/* 列头 */}
-            <div className={`${COLS} px-4 py-3 text-xs font-medium text-muted-foreground/60`}>
+            <div className={`${selectMode ? COLS : COLS_NO_SELECT} px-4 py-3 text-xs font-medium text-muted-foreground/60`}>
+              {selectMode && (
+                <span className="justify-self-center">
+                  <input
+                    type="checkbox"
+                    checked={categoryFiltered.length > 0 && selectedIds.size === categoryFiltered.length}
+                    onChange={toggleSelectAll}
+                    aria-label={t('review.selectAll')}
+                    className="h-3.5 w-3.5 cursor-pointer accent-primary"
+                  />
+                </span>
+              )}
               <span>{t('review.colSnapshot')}</span>
               <span>{t('review.colWord')}</span>
+              <span>{t('review.colNote')}</span>
               <span>{t('review.colStatus')}</span>
               <span>{t('review.nextReview')}</span>
               <span className="text-right">{t('review.colVideo')}</span>
@@ -391,7 +782,7 @@ export function ReviewQueue({ search, onOpenVideoAt, onOpenNotes }: ReviewQueueP
                 )
               })
             ) : (
-              renderWordRows(filtered)
+              renderWordRows(categoryFiltered)
             )}
           </div>
         )}
@@ -406,34 +797,30 @@ export function ReviewQueue({ search, onOpenVideoAt, onOpenNotes }: ReviewQueueP
           </div>
         )}
 
-        {/* 截图放大：点缩略图弹出全尺寸查看 */}
-        {lightbox && (
-          <div
-            className="fixed inset-0 z-[100] bg-black/70 backdrop-blur-sm grid place-items-center p-8"
-            onClick={() => setLightbox(null)}
-          >
-            <div
-              className="max-w-3xl w-full rounded-2xl overflow-hidden border border-border/60 bg-card shadow-2xl"
-              onClick={(e) => e.stopPropagation()}
-            >
-              <img
-                src={lightbox.dataUrl}
-                alt={lightbox.word}
-                className="w-full max-h-[68vh] object-contain bg-black"
-              />
-              <div className="flex items-center justify-between px-4 py-3">
-                <p className="text-sm font-semibold text-foreground">{lightbox.word}</p>
-                <button
-                  onClick={() => setLightbox(null)}
-                  className="inline-flex items-center gap-1 h-8 px-3 rounded-lg text-xs font-medium
-                             text-muted-foreground hover:bg-foreground/5 hover:text-foreground transition-colors cursor-pointer"
-                >
-                  <X size={14} /> {t('review.collapse')}
-                </button>
-              </div>
-            </div>
-          </div>
-        )}
+        {/* 截图放大：点缩略图弹出全尺寸查看（列表 / 闪卡共用组件） */}
+        <LightboxOverlay lightbox={lightbox} onClose={() => setLightbox(null)} t={t} />
+
+        {/* 删除生词确认悬浮窗（列表模式必须在这里渲染，闪卡分支另有同款） */}
+        <ConfirmDialog
+          open={!!pendingDelete}
+          title={t('notes.confirm.title')}
+          message={t('notes.confirm.msg')}
+          confirmLabel={t('notes.confirm.delete')}
+          cancelLabel={t('notes.confirm.cancel')}
+          onConfirm={confirmDeleteWord}
+          onCancel={() => setPendingDelete(null)}
+        />
+
+        {/* #2 批量删除确认悬浮窗 */}
+        <ConfirmDialog
+          open={pendingBulkDelete}
+          title={t('notes.confirm.title')}
+          message={t('notes.confirm.msg')}
+          confirmLabel={t('review.deleteSelected')}
+          cancelLabel={t('notes.confirm.cancel')}
+          onConfirm={confirmBulkDelete}
+          onCancel={() => setPendingBulkDelete(false)}
+        />
       </div>
     )
   }
@@ -523,6 +910,24 @@ export function ReviewQueue({ search, onOpenVideoAt, onOpenNotes }: ReviewQueueP
                   style={{ backfaceVisibility: 'hidden', WebkitBackfaceVisibility: 'hidden', transform: 'rotateY(180deg)' }}
                 >
                   <div className="flex-1 flex flex-col px-9 py-7 min-h-0 overflow-y-auto">
+                    {/* #2 截图缩略图：点按放大原帧 */}
+                    {(() => {
+                      const backThumb = cur.snapshotId ? (getSnapshotImage(cur.snapshotId) || resolvedThumbs[cur.snapshotId] || null) : null
+                      if (!backThumb) return null
+                      return (
+                        <button
+                          onClick={(e) => { e.stopPropagation(); openLightbox(cur) }}
+                          className="self-start mb-3 rounded-xl overflow-hidden border border-border/40 bg-foreground/5 cursor-pointer group shrink-0"
+                          aria-label={`${t('review.colSnapshot')} · ${cur.word}`}
+                        >
+                          <img
+                            src={backThumb}
+                            alt={cur.word}
+                            className="max-h-[84px] object-cover group-hover:opacity-90 transition-opacity"
+                          />
+                        </button>
+                      )
+                    })()}
                     {/* 词 + 释义同面：背面不再只有释义，顶部保留单词本体，下面紧跟中文释义 */}
                     <p className="text-[1.625rem] font-semibold tracking-tight text-foreground">
                       {cur.word}
@@ -549,9 +954,22 @@ export function ReviewQueue({ search, onOpenVideoAt, onOpenNotes }: ReviewQueueP
                         <p className="text-[0.6875rem] font-semibold uppercase tracking-[0.08em] text-muted-foreground/50">
                           {t('notes.analysis')}
                         </p>
-                        <div className="mt-1.5 flex items-center gap-1.5 text-[0.8125rem] text-muted-foreground/50">
-                          <Sparkles size={13} /> {t('review.noAiAnalysis')}
-                        </div>
+                        {aiBusy ? (
+                          <div className="mt-1.5 flex items-center gap-1.5 text-[0.8125rem] text-muted-foreground">
+                            <Loader2 size={13} className="animate-spin text-primary" />
+                            {t('ai.analyzing', { word: cur.word })}
+                          </div>
+                        ) : (
+                          <button
+                            onClick={(e) => { e.stopPropagation(); analyzeWord(cur) }}
+                            className="mt-1.5 inline-flex items-center gap-1.5 h-8 px-3 rounded-lg
+                                       bg-gradient-to-r from-primary/20 to-chart-3/20 hover:from-primary/30 hover:to-chart-3/30
+                                       border border-primary/20 text-primary text-[0.8125rem] font-semibold transition-all cursor-pointer"
+                          >
+                            <Sparkles size={13} /> {t('ai.analyze', { word: cur.word })}
+                          </button>
+                        )}
+                        {aiError && <p className="mt-1.5 text-[0.75rem] text-destructive/80">{aiError}</p>}
                       </div>
                     )}
                     {cur.userNote && (
@@ -610,6 +1028,20 @@ export function ReviewQueue({ search, onOpenVideoAt, onOpenNotes }: ReviewQueueP
           </>
         ) : null}
       </div>
+
+      {/* #2 截图放大：闪卡背面缩略图点击后全尺寸查看 */}
+      <LightboxOverlay lightbox={lightbox} onClose={() => setLightbox(null)} t={t} />
+
+      {/* #1 删除生词确认悬浮窗 */}
+      <ConfirmDialog
+        open={!!pendingDelete}
+        title={t('notes.confirm.title')}
+        message={t('notes.confirm.msg')}
+        confirmLabel={t('notes.confirm.delete')}
+        cancelLabel={t('notes.confirm.cancel')}
+        onConfirm={confirmDeleteWord}
+        onCancel={() => setPendingDelete(null)}
+      />
     </div>
   )
 }

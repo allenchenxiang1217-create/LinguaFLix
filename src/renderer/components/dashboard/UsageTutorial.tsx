@@ -1,6 +1,8 @@
 import { useState } from 'react'
-import { BookOpen, ChevronDown } from 'lucide-react'
+import { BookOpen, ChevronDown, ImageIcon } from 'lucide-react'
 import { useI18n } from '../../i18n/useI18n'
+import { useSettingsStore, formatShortcutKey } from '../../stores/settingsStore'
+import type { ShortcutAction, ShortcutMap } from '../../stores/settingsStore'
 
 // ── In-app usage guide (mirrors USAGE.md). Rendered as a collapsible section
 // at the top of the Dashboard so new users can get oriented without leaving
@@ -49,9 +51,25 @@ function Kbd({ children }: { children: React.ReactNode }) {
   return <kbd className="px-1.5 py-0.5 rounded bg-secondary text-[0.6875rem] font-mono font-semibold text-foreground/80 border border-border/40">{children}</kbd>
 }
 
-export function UsageTutorial() {
-  const [open, setOpen] = useState(false)
+/** 动态快捷键：跟随用户在「设置 → 快捷键」里的自定义实时显示。 */
+function ShortcutKey({ action, shortcuts }: { action: ShortcutAction; shortcuts: ShortcutMap }) {
+  return <Kbd>{formatShortcutKey(shortcuts[action])}</Kbd>
+}
+
+/** 预留图片位：为将来的截图/插图占位，教程改版时版式不跳动。 */
+function Shot({ label }: { label: string }) {
+  return (
+    <div className="rounded-xl border-2 border-dashed border-border/50 bg-background/40 flex flex-col items-center justify-center gap-2 py-10 px-6">
+      <ImageIcon size={20} className="text-muted-foreground/30" />
+      <span className="text-[0.6875rem] text-muted-foreground/40 text-center">{label}</span>
+    </div>
+  )
+}
+
+export function UsageTutorial({ defaultOpen = false }: { defaultOpen?: boolean }) {
+  const [open, setOpen] = useState(defaultOpen)
   const { t } = useI18n()
+  const shortcuts = useSettingsStore((s) => s.shortcuts)
 
   return (
     <section className="rounded-2xl border border-border/50 bg-secondary/20 overflow-hidden">
@@ -95,6 +113,7 @@ export function UsageTutorial() {
             />
             <p className="font-medium text-foreground/85">{t('tutorial.s1.player')}</p>
             <pre className="rounded-lg bg-background/60 border border-border/30 p-3 text-[0.6875rem] font-mono text-foreground/70 overflow-x-auto leading-snug">{t('tutorial.s1.diagram')}</pre>
+            <Shot label={t('tutorial.img1')} />
           </Section>
 
           <Section num="2" title={t('tutorial.s2.title')}>
@@ -125,9 +144,9 @@ export function UsageTutorial() {
               rows={[
                 [t('tutorial.s4.r1k'), t('tutorial.s4.r1v')],
                 [t('tutorial.s4.r2k'), t('tutorial.s4.r2v')],
-                [<Kbd key="b">B</Kbd>, t('tutorial.s4.r3v')],
-                [<Kbd key="l">L</Kbd>, t('tutorial.s4.r4v')],
-                [<Kbd key="r">R</Kbd>, t('tutorial.s4.r5v')],
+                [<ShortcutKey key="b" action="toggleBlocker" shortcuts={shortcuts} />, t('tutorial.s4.r3v')],
+                [<ShortcutKey key="l" action="lockBlocker" shortcuts={shortcuts} />, t('tutorial.s4.r4v')],
+                [<ShortcutKey key="r" action="resetBlocker" shortcuts={shortcuts} />, t('tutorial.s4.r5v')],
               ]}
             />
             <p className="font-medium text-foreground/85">{t('tutorial.s4.panel')}</p>
@@ -140,13 +159,13 @@ export function UsageTutorial() {
                 [t('tutorial.s4.p5k'), t('tutorial.s4.p5v')],
               ]}
             />
-            <Note>{t('tutorial.s4.noteA')}<Kbd>R</Kbd>{t('tutorial.s4.noteB')}</Note>
+            <Note>{t('tutorial.s4.noteA')}<ShortcutKey action="resetBlocker" shortcuts={shortcuts} />{t('tutorial.s4.noteB')}</Note>
           </Section>
 
           <Section num="5" title={t('tutorial.s5.title')}>
             <p className="font-medium text-foreground/85">{t('tutorial.s5.shot')}</p>
             <ul className="list-disc list-outside pl-4 space-y-1">
-              <li>{t('tutorial.s5.l1a')}<Kbd>S</Kbd>{t('tutorial.s5.l1b')}</li>
+              <li>{t('tutorial.s5.l1a')}<ShortcutKey action="takeScreenshot" shortcuts={shortcuts} />{t('tutorial.s5.l1b')}</li>
               <li>{t('tutorial.s5.l2a')}<b>{t('tutorial.s5.l2b')}</b>{t('tutorial.s5.l2c')}</li>
               <li>{t('tutorial.s5.l3a')}<b>{t('tutorial.s5.l3b')}</b>{t('tutorial.s5.l3c')}</li>
               <li><b>{t('tutorial.s5.l4a')}</b>{t('tutorial.s5.l4b')}</li>
@@ -164,6 +183,13 @@ export function UsageTutorial() {
               <li>{t('tutorial.s5.n2a')}<b>{t('tutorial.s5.n2b')}</b>{t('tutorial.s5.n2c')}<b>{t('tutorial.s5.n2d')}</b>{t('tutorial.s5.n2e')}<b>Re-recognize area</b>{t('tutorial.s5.n2f')}</li>
               <li>{t('tutorial.s5.n3')}</li>
             </ul>
+            <p className="font-medium text-foreground/85">{t('tutorial.s5.del')}</p>
+            <ul className="list-disc list-outside pl-4 space-y-1">
+              <li>{t('tutorial.s5.d1a')}<b>{t('tutorial.s5.d1b')}</b>{t('tutorial.s5.d1c')}</li>
+              <li>{t('tutorial.s5.d2a')}<b>{t('tutorial.s5.d2b')}</b>{t('tutorial.s5.d2c')}</li>
+              <li>{t('tutorial.s5.d3')}</li>
+            </ul>
+            <Shot label={t('tutorial.img2')} />
           </Section>
 
           <Section num="6" title={t('tutorial.s6.title')}>
@@ -177,6 +203,7 @@ export function UsageTutorial() {
               <pre className="rounded-lg bg-background/60 border border-border/30 p-3 text-[0.6875rem] font-mono text-foreground/70 overflow-x-auto leading-snug">{t('tutorial.s6.apiCode')}</pre>
               <p className="text-foreground/60 mt-1">{t('tutorial.s6.apiNote')}</p>
             </div>
+            <Shot label={t('tutorial.img3')} />
           </Section>
 
           <Section num="7" title={t('tutorial.s7.title')}>
@@ -184,21 +211,25 @@ export function UsageTutorial() {
               <li><b>{t('tutorial.s7.l1a')}</b>{t('tutorial.s7.l1b')}</li>
               <li><b>{t('tutorial.s7.l2a')}</b>{t('tutorial.s7.l2b')}</li>
               <li>{t('tutorial.s7.l3')}</li>
+              <li>{t('tutorial.s7.l4a')}<b>{t('tutorial.s7.l4b')}</b>{t('tutorial.s7.l4c')}</li>
+              <li>{t('tutorial.s7.l5')}</li>
             </ul>
           </Section>
 
           <Section num="8" title={t('tutorial.s8.title')}>
             <Table
               rows={[
-                [<Kbd key="space">Space</Kbd>, t('tutorial.s8.r1v')],
-                [<span key="l"><Kbd>←</Kbd> / <Kbd>→</Kbd></span>, t('tutorial.s8.r2v')],
-                [<Kbd key="b">B</Kbd>, t('tutorial.s8.r3v')],
-                [<Kbd key="l2">L</Kbd>, t('tutorial.s8.r4v')],
-                [<Kbd key="r2">R</Kbd>, t('tutorial.s8.r5v')],
-                [<Kbd key="s">S</Kbd>, t('tutorial.s8.r6v')],
+                [<ShortcutKey key="pp" action="playPause" shortcuts={shortcuts} />, t('tutorial.s8.r1v')],
+                [<span key="seek"><ShortcutKey action="seekBack5" shortcuts={shortcuts} /> / <ShortcutKey action="seekFwd5" shortcuts={shortcuts} /></span>, t('tutorial.s8.r2v')],
+                [<ShortcutKey key="tb" action="toggleBlocker" shortcuts={shortcuts} />, t('tutorial.s8.r3v')],
+                [<ShortcutKey key="lb" action="lockBlocker" shortcuts={shortcuts} />, t('tutorial.s8.r4v')],
+                [<ShortcutKey key="rb" action="resetBlocker" shortcuts={shortcuts} />, t('tutorial.s8.r5v')],
+                [<ShortcutKey key="ss" action="takeScreenshot" shortcuts={shortcuts} />, t('tutorial.s8.r6v')],
+                [<ShortcutKey key="fs" action="fullscreen" shortcuts={shortcuts} />, t('tutorial.s8.r7v')],
               ]}
             />
             <p className="text-foreground/60">{t('tutorial.s8.tip')}</p>
+            <p className="text-foreground/60">{t('tutorial.s8.tip2')}</p>
           </Section>
 
           <Section num="9" title={t('tutorial.s9.title')}>
@@ -207,8 +238,8 @@ export function UsageTutorial() {
                 [t('tutorial.s9.r1k'), t('tutorial.s9.r1v')],
                 [t('tutorial.s9.r2k'), t('tutorial.s9.r2v')],
                 [t('tutorial.s9.r3k'), t('tutorial.s9.r3v')],
-                [t('tutorial.s9.r4k'), t('tutorial.s9.r4v')],
-                [t('tutorial.s9.r5k'), t('tutorial.s9.r5v')],
+                [t('tutorial.s9.r4k'), <span key="r4">{t('tutorial.s9.r4vA')}<ShortcutKey action="resetBlocker" shortcuts={shortcuts} />{t('tutorial.s9.r4vB')}</span>],
+                [t('tutorial.s9.r5k'), <span key="r5">{t('tutorial.s9.r5vA')}<ShortcutKey action="lockBlocker" shortcuts={shortcuts} />{t('tutorial.s9.r5vB')}</span>],
               ]}
             />
           </Section>

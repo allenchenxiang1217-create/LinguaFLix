@@ -49,7 +49,7 @@ export interface VocabWord {
   id: string
   word: string
   contextSentence: string          // the full subtitle/OCR line
-  snapshotId: string               // parent snapshot
+  snapshotId: string               // parent snapshot (primary = earliest occurrence)
   noteId: string                   // parent note
   videoHash: string                // parent video
   videoTimestamp: number           // video time in seconds
@@ -59,6 +59,19 @@ export interface VocabWord {
   createdAt: number                // Date.now()
   reviewedAt: number | null
   reviewCount: number
+  /** #7 同一单词在不同视频/不同帧被保存的所有出处（含主出处）。缺省时按主字段合成。 */
+  occurrences?: WordOccurrence[]
+  /** #7 这个单词被记录了几次（= occurrences.length）。 */
+  recordCount?: number
+}
+
+/** #7 单词的一次「被记录」出处：指向某个视频的某个截图/时间点。 */
+export interface WordOccurrence {
+  snapshotId: string
+  noteId: string
+  videoHash: string
+  videoTimestamp: number
+  createdAt: number
 }
 
 // ── Snapshot (screenshot entry within a note) ──
@@ -101,6 +114,8 @@ export interface VideoMeta {
   lastPlayedTime: number           // seek position
   lastOpenedAt: number             // Date.now()
   thumbnailDataUrl?: string        // auto-generated from first frame
+  /** #10 自动剪辑生成的「复习视频」条目（区别于普通导入/下载的视频，用于覆盖旧剪辑时识别）。 */
+  isReviewClip?: boolean
 }
 
 // ── App-level data ──

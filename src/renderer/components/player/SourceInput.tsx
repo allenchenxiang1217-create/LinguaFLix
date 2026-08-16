@@ -2,6 +2,7 @@ import { useState, useCallback, useRef, useEffect } from 'react'
 import { usePlayerStore } from '../../stores/playerStore'
 import { useAppStore } from '../../stores/appStore'
 import { useNoteStore } from '../../stores/noteStore'
+import { useToastStore } from '../../stores/toastStore'
 import { useSettingsStore } from '../../stores/settingsStore'
 import { useI18n } from '../../i18n/useI18n'
 import { useSubtitle } from '../../hooks/useSubtitle'
@@ -17,16 +18,51 @@ import {
   Upload, Link, FileText, Film,
   Loader2, AlertCircle, Download, CheckCircle2,
 } from 'lucide-react'
+import { simpleHash } from '../../lib/hash'
 
-/** Generate a simple hash from a string for video identity */
-function simpleHash(str: string): string {
-  let hash = 0
-  for (let i = 0; i < str.length; i++) {
-    const char = str.charCodeAt(i)
-    hash = ((hash << 5) - hash) + char
-    hash |= 0
+/**
+ * Upload a local video to the backend so it persists across reloads (web mode).
+ * Returns the absolute path written by the backend. The registry must keep this
+ * raw path rather than a blob URL or a URL containing the current web origin;
+ * toMediaUrl derives a fresh playable URL whenever the video is opened.
+ */
+async function uploadLocalVideo(file: File): Promise<string | null> {
+  try {
+    const res = await fetch(`/api/upload/video?name=${encodeURIComponent(file.name)}`, {
+      method: 'POST',
+      body: file,
+    })
+    if (!res.ok) return null
+    const data = await res.json().catch(() => null)
+    if (!data?.filePath) return null
+    return data.filePath
+  } catch {
+    return null
   }
-  return Math.abs(hash).toString(16).padStart(8, '0')
+}
+
+/**
+ * Import a local video file for the current environment, returning a playable
+ * src plus a persistable path. A web import is rejected when the backend cannot
+ * save it; accepting a session-scoped blob URL would recreate the exact failure
+ * mode where the video appears imported and then disappears after refresh.
+ *
+ * - Electron: webUtils.getPathForFile gives the real absolute path (same as the
+ *   open-video dialog) — persist the raw path so it survives a reload.
+ * - Web: upload to the backend so the file lands on disk and can be re-served.
+ */
+async function importLocalFile(file: File): Promise<{ src: string; persistPath: string } | null> {
+  const { electronAPI } = window as any
+  if (electronAPI?.getPathForFile) {
+    const rawPath = electronAPI.getPathForFile(file)
+    if (rawPath) {
+      await initMediaUrl()
+      return { src: toMediaUrl(rawPath), persistPath: rawPath }
+    }
+  }
+  const persistedPath = await uploadLocalVideo(file)
+  if (!persistedPath) return null
+  return { src: toMediaUrl(persistedPath), persistPath: persistedPath }
 }
 
 type ResolveState = 'idle' | 'checking' | 'resolving' | 'resolved' | 'error'
@@ -38,9 +74,12 @@ export function SourceInput() {
   const [url, setUrl] = useState('')
   const [dragover, setDragover] = useState(false)
   const videoSrc = usePlayerStore((s) => s.videoSrc)
+  const videoHash = usePlayerStore((s) => s.videoHash)
   const loadVideo = usePlayerStore((s) => s.loadVideo)
   const { loadSubtitleFile } = useSubtitle()
   const registerVideo = useAppStore((s) => s.registerVideo)
+  // 原始文件名（注册进 appStore 时保存），compact 顶部栏优先显示它而非 URL-encoded 的 src 段。
+  const videoFileName = useAppStore((s) => (videoHash ? s.videos[videoHash]?.fileName : undefined))
   const loadNotebookStore = useNoteStore((s) => s.loadNotebook)
   const loadVideoOcrRegion = useNoteStore((s) => s.loadVideoOcrRegion)
   const createNote = useNoteStore((s) => s.createNote)
@@ -196,8 +235,12 @@ export function SourceInput() {
     if (electronAPI?.openVideo) {
       const filePath = await electronAPI.openVideo()
       if (filePath) {
-        const name = filePath.split('/').pop() || filePath
-        handleVideoLoaded(toMediaUrl(filePath), name)
+        const name = filePath.split(/[\\/]/).pop() || filePath
+        // #9 修复：先等后端 media base 就绪，src 用可播的 media URL；但 persistPath
+        // 存「原始绝对路径」而非 media URL——刷新后 resolveReplayableMedia 才能
+        // 对本地路径正确回放（旧逻辑存 file:// 兜底 URL，刷新后无法回放 → 视频消失）。
+        await initMediaUrl()
+        handleVideoLoaded(toMediaUrl(filePath), name, filePath)
       }
     } else {
       videoInputRef.current?.click()
@@ -205,27 +248,37 @@ export function SourceInput() {
   }, [handleVideoLoaded])
 
   const handleFileChange = useCallback(
-    (e: React.ChangeEvent<HTMLInputElement>) => {
+    async (e: React.ChangeEvent<HTMLInputElement>) => {
       const file = e.target.files?.[0]
-      if (file) {
-        const src = URL.createObjectURL(file)
-        handleVideoLoaded(src, file.name)
+      if (!file) return
+      // Only finish the import after a stable path exists. A blob: fallback looks
+      // successful but cannot survive refresh, so it must never enter the registry.
+      const imported = await importLocalFile(file)
+      if (!imported) {
+        useToastStore.getState().showToast(t('import.unsavedToast'), 4000)
+        e.target.value = ''
+        return
       }
+      await handleVideoLoaded(imported.src, file.name, imported.persistPath)
+      e.target.value = ''
     },
-    [handleVideoLoaded],
+    [handleVideoLoaded, t],
   )
 
   /** Drag-and-drop a local video file onto the import card. */
   const handleDrop = useCallback(
-    (e: React.DragEvent) => {
+    async (e: React.DragEvent) => {
       e.preventDefault()
       const file = e.dataTransfer.files?.[0]
-      if (file) {
-        const src = URL.createObjectURL(file)
-        handleVideoLoaded(src, file.name)
+      if (!file) return
+      const imported = await importLocalFile(file)
+      if (!imported) {
+        useToastStore.getState().showToast(t('import.unsavedToast'), 4000)
+        return
       }
+      await handleVideoLoaded(imported.src, file.name, imported.persistPath)
     },
-    [handleVideoLoaded],
+    [handleVideoLoaded, t],
   )
 
   /** Handle URL submission — resolve platform URLs, load direct URLs directly. */
@@ -298,8 +351,10 @@ export function SourceInput() {
           // playback, removing every server/CORS/format difference that can
           // surface as "Video failed to load". For very large files, fall back to
           // streaming the same-origin media URL instead of buffering the whole
-          // file in memory. The stable media URL is what gets persisted to the
-          // registry, so Continue/re-open still works after a page reload.
+          // file in memory. We persist the RAW absolute path (not the media URL),
+          // because the media URL embeds the media server's per-launch random port
+          // and dies on restart — resolveReplayableMedia rewrites the raw path to
+          // the current port on re-open (same as the open-file/import paths).
           let playSrc = mediaUrl
           try {
             const res = await fetch(mediaUrl)
@@ -316,7 +371,7 @@ export function SourceInput() {
           } catch {
             // fetch failed for any reason — fall through to the streaming URL.
           }
-          handleVideoLoaded(playSrc, fileName, mediaUrl)
+          handleVideoLoaded(playSrc, fileName, result.filePath!)
         } catch (err: any) {
           setResolveState('error')
           setDownloading(false)
@@ -377,7 +432,11 @@ export function SourceInput() {
         <div className="flex items-center gap-2 px-3 py-1.5 rounded-xl glass-light">
           <Film size={13} className="text-primary/70" />
           <span className="text-[0.6875rem] text-foreground/70 truncate max-w-[180px] font-medium">
-            {videoSrc.split('/').pop()?.split('?')[0] || videoSrc}
+            {videoFileName ||
+              (() => {
+                const seg = videoSrc.split('/').pop()?.split('?')[0] || videoSrc
+                try { return decodeURIComponent(seg) } catch { return seg }
+              })()}
           </span>
           <div className="w-px h-3 bg-border/50" />
           <button

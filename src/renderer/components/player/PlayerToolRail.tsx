@@ -6,6 +6,7 @@ import { Eye, EyeOff, SquareDashed, Gauge, Volume2, VolumeX } from 'lucide-react
 import { BlockerPanel } from '../subtitles/BlockerSettings'
 import { OcrRegionButton } from '../transcript/OcrRegionButton'
 import { useI18n } from '../../i18n/useI18n'
+import { portalTarget } from '../../lib/portal'
 
 /**
  * #4 右侧工具栏：把倍速、音量、挡块调节与 OCR 区域收敛到视频右侧一条纵向工具条，
@@ -30,7 +31,7 @@ function ToolCard({ top, left, width = 232, onClose, children }: {
         {children}
       </div>
     </>,
-    document.body,
+    portalTarget(),
   )
 }
 

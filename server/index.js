@@ -16,6 +16,7 @@ const https = require('https');
 const path = require('path');
 const fs = require('fs');
 const os = require('os');
+const crypto = require('crypto');
 const stream = require('stream');
 const util = require('util');
 const child_process = require('child_process');
@@ -30,12 +31,71 @@ const PORT = parseInt(process.env.PORT || process.argv.slice(2).find((_, i, a) =
 const USER_DATA_DIR = path.join(os.homedir(), 'Library', 'Application Support', 'LinguaFlix');
 const DOWNLOAD_DIR = path.join(os.homedir(), 'Movies', 'LinguaFlix');
 const SCREENSHOTS_DIR = path.join(USER_DATA_DIR, 'screenshots');
+const UPLOADS_DIR = path.join(USER_DATA_DIR, 'uploads');
 const BIN_DIR = path.join(USER_DATA_DIR, 'bin');
+// 自动剪辑生成的复习视频（#25）——放进下载目录的子文件夹，与普通下载区分。
+const CLIPS_DIR = path.join(DOWNLOAD_DIR, 'clips');
 
 // Ensure directories exist
-[USER_DATA_DIR, DOWNLOAD_DIR, SCREENSHOTS_DIR, BIN_DIR].forEach(dir => {
+[USER_DATA_DIR, DOWNLOAD_DIR, SCREENSHOTS_DIR, UPLOADS_DIR, BIN_DIR, CLIPS_DIR].forEach(dir => {
   if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
 });
+
+// ── ffmpeg resolution (auto-clip) ──
+let cachedFfmpegPath = null;
+
+async function getFfmpegPath() {
+  if (cachedFfmpegPath) return cachedFfmpegPath;
+  try {
+    const { stdout } = await execFileAsync('which', ['ffmpeg'], { timeout: 5000 });
+    const found = stdout.trim().split('\n')[0]?.trim();
+    if (found && fs.existsSync(found)) { cachedFfmpegPath = found; return found; }
+  } catch {}
+  // Homebrew 默认安装位置兜底（macOS 上 which 可能因 PATH 异常而失败）。
+  const alt = '/opt/homebrew/bin/ffmpeg';
+  if (fs.existsSync(alt)) { cachedFfmpegPath = alt; return alt; }
+  return null;
+}
+
+/**
+ * 把渲染端传来的 filePath 还原为服务器可读的本地绝对路径。
+ *   - blob:/data:  → 浏览器临时对象，服务器读不到 → null
+ *   - https:/http: 远程直链 → 服务器读不到 → null（http://…/media/… 这种媒体服务器 URL 除外）
+ *   - 绝对路径（Electron 打开本地文件） → 直接用
+ *   - /media/… 或 http(s)://…/media/… （web 模式存储 URL） → 剥掉前缀 + decodeURIComponent
+ * 始终防御路径穿越（'..' 拒绝）。
+ */
+function resolveLocalFilePath(p) {
+  if (!p || typeof p !== 'string') return null;
+  if (p.startsWith('blob:') || p.startsWith('data:')) return null;
+  let abs = p;
+  if (/^https?:\/\//.test(p)) {
+    const m = p.match(/^https?:\/\/[^/]+(\/media\/.*)$/);
+    if (!m) return null; // 远程直链（无 /media 前缀）→ 服务器不可读
+    abs = m[1];
+  }
+  if (abs.startsWith('/media/')) {
+    abs = abs.slice('/media'.length);
+    try { abs = decodeURIComponent(abs); } catch {}
+  }
+  if (!abs.startsWith('/')) abs = '/' + abs;
+  if (abs.split('/').includes('..')) return null;
+  return abs;
+}
+
+/** 带并发上限的异步 map（用于并行抽取片段）。 */
+async function mapLimit(items, limit, fn) {
+  const results = new Array(items.length);
+  let i = 0;
+  const workers = Array.from({ length: Math.min(limit, items.length) }, async () => {
+    while (i < items.length) {
+      const idx = i++;
+      results[idx] = await fn(items[idx], idx);
+    }
+  });
+  await Promise.all(workers);
+  return results;
+}
 
 // ── Offline dictionary (ECDICT SQLite) ──
 // Same bundled DB the Electron main process uses. Opened lazily (only on the
@@ -507,6 +567,30 @@ async function handleRequest(req, res) {
       return;
     }
 
+    // ── API: upload local video (web mode persistence) ──
+    // The renderer POSTs the raw file bytes as the request body (File as the fetch
+    // body), and the original name via ?name=. We stream it straight to disk under
+    // the persistent uploads dir and hand back the absolute path so the client can
+    // build a same-origin /media/... URL that survives page reloads (blob: URLs do
+    // not). A UUID suffix keeps repeated imports of the same filename collision-free.
+    if (req.method === 'POST' && pathname === '/api/upload/video') {
+      const rawName = parsedUrl.searchParams.get('name') || 'video.mp4'
+      const safeName = (path.basename(rawName) || 'video.mp4').replace(/[^\w.\- ]/g, '_').slice(0, 100)
+      const ext = path.extname(safeName) || '.mp4'
+      const base = path.basename(safeName, ext) || 'video'
+      const storedName = `${base}-${crypto.randomUUID()}${ext}`
+      const filePath = path.join(UPLOADS_DIR, storedName)
+      try {
+        await pipelineAsync(req, fs.createWriteStream(filePath))
+        jsonResponse(res, 200, { filePath, fileName: safeName })
+      } catch (err) {
+        fs.rmSync(filePath, { force: true })
+        console.error('[upload] failed:', err.message)
+        jsonResponse(res, 500, { error: 'Upload failed' })
+      }
+      return;
+    }
+
     // ── API: stream:resolve ──
     if (req.method === 'POST' && pathname === '/api/stream/resolve') {
       const body = await readBody(req);
@@ -658,6 +742,125 @@ async function handleRequest(req, res) {
       return;
     }
 
+    // ── API: review-clip 自动剪辑（#25）──
+    // 看完整片后，把每个生词 [t-2s, t+2s] 的片段抽出来拼成一个复习视频。
+    // 采用研究验证过的可靠方案：每段 `-ss 在 -i 之前 + 重编码`（帧级精确，绝不 -c copy
+    // 抽任意时间戳——关键帧不准），全部抽完后用 concat demuxer `-c copy` 无损合并。
+    if (req.method === 'POST' && pathname === '/api/review-clip') {
+      const body = await readBody(req);
+      const { sourcePath, duration, segments } = (body && typeof body === 'object') ? body : {};
+      if (!sourcePath || !Array.isArray(segments) || segments.length === 0) {
+        jsonResponse(res, 400, { error: 'Missing sourcePath/segments' });
+        return;
+      }
+
+      const inputPath = resolveLocalFilePath(sourcePath);
+      if (!inputPath || !fs.existsSync(inputPath)) {
+        jsonResponse(res, 422, { error: 'no_local_file' });
+        return;
+      }
+      const ffmpeg = await getFfmpegPath();
+      if (!ffmpeg) {
+        jsonResponse(res, 500, { error: 'ffmpeg_not_found' });
+        return;
+      }
+
+      const totalDuration = (typeof duration === 'number' && Number.isFinite(duration) && duration > 0) ? duration : 0;
+
+      // 1) 计算每个生词的窗口 [t-2, t+2]，夹到 [0, duration]；非法的 t 丢弃。
+      const MARGIN = 2;
+      const windows = [];
+      for (const seg of segments) {
+        const t = Number(seg && seg.t);
+        if (!Number.isFinite(t) || t < 0) continue;
+        const start = Math.max(0, t - MARGIN);
+        const end = totalDuration > 0 ? Math.min(totalDuration, t + MARGIN) : t + MARGIN;
+        if (end <= start) continue;
+        windows.push({ start, end });
+      }
+      if (windows.length === 0) {
+        jsonResponse(res, 422, { error: 'no_clippable_segments' });
+        return;
+      }
+
+      // 2) 排序 + 合并重叠/相邻窗口（同一场景多次存词只剪一次）。
+      windows.sort((a, b) => a.start - b.start);
+      const merged = [];
+      for (const w of windows) {
+        const last = merged[merged.length - 1];
+        if (last && w.start <= last.end + 0.05) last.end = Math.max(last.end, w.end);
+        else merged.push({ start: w.start, end: w.end });
+      }
+
+      // 3) 并行抽取片段（重编码，并发 2 防吃满 CPU）→ concat demuxer 合并。
+      const workDir = fs.mkdtempSync(path.join(os.tmpdir(), 'linguaflix-clip-'));
+      const segFiles = [];
+      try {
+        await mapLimit(merged, 2, async (w, i) => {
+          const out = path.join(workDir, `seg_${String(i).padStart(3, '0')}.mp4`);
+          // `-map 0:v:0 -map 0:a:0?` 让无声源也能抽（音频可选），各段参数一致保证可 concat。
+          const args = [
+            '-y',
+            '-ss', String(w.start), '-i', inputPath,
+            '-t', String(w.end - w.start),
+            '-map', '0:v:0', '-map', '0:a:0?',
+            '-c:v', 'libx264', '-preset', 'veryfast', '-crf', '20',
+            '-c:a', 'aac', '-b:a', '128k', '-ar', '44100', '-ac', '2',
+            '-avoid_negative_ts', 'make_zero',
+            out,
+          ];
+          await execFileAsync(ffmpeg, args, { timeout: 120000, maxBuffer: 10 * 1024 * 1024 });
+          segFiles.push(out);
+        });
+        if (segFiles.length === 0) {
+          jsonResponse(res, 500, { error: 'extraction_failed' });
+          return;
+        }
+
+        const listPath = path.join(workDir, 'list.txt');
+        fs.writeFileSync(listPath, segFiles.map((f) => `file '${f.replace(/'/g, `'\\''`)}'`).join('\n'));
+        const outPath = path.join(CLIPS_DIR, `review_${Date.now()}.mp4`);
+        await execFileAsync(ffmpeg, ['-y', '-f', 'concat', '-safe', '0', '-i', listPath, '-c', 'copy', '-movflags', '+faststart', outPath], { timeout: 180000, maxBuffer: 10 * 1024 * 1024 });
+
+        const clipDuration = merged.reduce((sum, w) => sum + (w.end - w.start), 0);
+        jsonResponse(res, 200, {
+          filePath: outPath,
+          fileName: path.basename(outPath),
+          duration: Math.round(clipDuration),
+          clipCount: merged.length,
+        });
+      } catch (err) {
+        console.error('[review-clip] failed:', err && err.message);
+        jsonResponse(res, 500, { error: (err && err.message) || 'Clip generation failed' });
+      } finally {
+        try { fs.rmSync(workDir, { recursive: true, force: true }); } catch {}
+      }
+      return;
+    }
+
+    // ── API: review-clip delete（#10 覆盖旧剪辑：删除磁盘上的旧复习视频）──
+    // 只接受 basename（review_*.mp4），防路径穿越；文件必须落在 CLIPS_DIR 内。
+    if (req.method === 'DELETE' && pathname === '/api/review-clip') {
+      const raw = parsedUrl.searchParams.get('file') || '';
+      const safe = path.basename(raw);
+      if (!safe || !/^review_.+\.mp4$/.test(safe)) {
+        jsonResponse(res, 400, { error: 'Invalid clip file' });
+        return;
+      }
+      const target = path.join(CLIPS_DIR, safe);
+      if (target !== path.resolve(target)) {
+        jsonResponse(res, 403, { error: 'Forbidden' });
+        return;
+      }
+      try {
+        fs.rmSync(target, { force: true });
+        jsonResponse(res, 200, { ok: true });
+      } catch (err) {
+        jsonResponse(res, 500, { error: (err && err.message) || 'Delete failed' });
+      }
+      return;
+    }
+
     // ── API: screenshot:save ──
     if (req.method === 'POST' && pathname === '/api/screenshot/save') {
       const body = await readBody(req);
@@ -686,6 +889,77 @@ async function handleRequest(req, res) {
       } catch {
         jsonResponse(res, 404, { error: 'not_found' });
       }
+      return;
+    }
+
+    // ── API: screenshot:delete (web-mode delete of a saved PNG) ──
+    // Takes the basename only (path traversal is defended against). Used by #1/#10
+    // deletion cascade to free disk space when a snapshot's screenshot becomes orphaned.
+    if (req.method === 'DELETE' && pathname === '/api/screenshot/delete') {
+      const raw = parsedUrl.searchParams.get('file') || '';
+      const safe = path.basename(raw);
+      if (!safe || !/^snapshot_.+\.png$/.test(safe)) {
+        jsonResponse(res, 400, { error: 'bad_file' });
+        return;
+      }
+      try {
+        fs.unlinkSync(path.join(SCREENSHOTS_DIR, safe));
+        jsonResponse(res, 200, { ok: true });
+      } catch {
+        jsonResponse(res, 404, { error: 'not_found' });
+      }
+      return;
+    }
+
+    // ── API: AI 词汇分析流式代理 ──
+    // Browsers can't call OpenAI/Anthropic directly (third-party CORS), so the
+    // backend proxies the stream: it forwards the upstream SSE response byte-for-byte.
+    // Node is not subject to the browser same-origin policy.
+    if (req.method === 'POST' && pathname === '/api/ai/stream') {
+      const body = await readBody(req);
+      const { type, baseUrl, apiKey, model, prompt } = (body && typeof body === 'object') ? body : {};
+      if (!type || !baseUrl || !apiKey || !model || !prompt) {
+        jsonResponse(res, 400, { error: 'Missing AI params (type/baseUrl/apiKey/model/prompt)' });
+        return;
+      }
+      const isAnthropic = type === 'anthropic';
+      const base = baseUrl.replace(/\/+$/, '');
+      const upstreamUrl = isAnthropic ? `${base}/messages` : `${base}/chat/completions`;
+      const upstreamHeaders = isAnthropic
+        ? { 'Content-Type': 'application/json', 'x-api-key': apiKey, 'anthropic-version': '2023-06-01' }
+        : { 'Content-Type': 'application/json', Authorization: `Bearer ${apiKey}` };
+      const upstreamBody = isAnthropic
+        ? JSON.stringify({ model, max_tokens: 600, messages: [{ role: 'user', content: prompt }], stream: true })
+        : JSON.stringify({ model, messages: [{ role: 'user', content: prompt }], stream: true, max_tokens: 600, temperature: 0.7 });
+
+      let upstream;
+      try {
+        upstream = await fetch(upstreamUrl, { method: 'POST', headers: upstreamHeaders, body: upstreamBody });
+      } catch (err) {
+        jsonResponse(res, 502, { error: 'Upstream unreachable: ' + (err.message || '') });
+        return;
+      }
+
+      if (!upstream.ok) {
+        const errText = await upstream.text().catch(() => '');
+        jsonResponse(res, upstream.status, { error: errText || `Upstream ${upstream.status}` });
+        return;
+      }
+
+      res.writeHead(200, {
+        ...corsHeaders(req),
+        'Content-Type': 'text/event-stream',
+        'Cache-Control': 'no-cache',
+        Connection: 'keep-alive',
+      });
+      try {
+        for await (const chunk of upstream.body) {
+          res.write(chunk);
+        }
+      } catch {
+        // client aborted mid-stream — drop silently
+      }
+      res.end();
       return;
     }
 

@@ -1,10 +1,13 @@
 import { useState } from 'react'
 import { useNoteStore } from '../../stores/noteStore'
 import { usePlayerStore } from '../../stores/playerStore'
+import { useAppStore } from '../../stores/appStore'
+import { useReviewStore } from '../../stores/reviewStore'
 import { useSettingsStore, formatShortcutKey } from '../../stores/settingsStore'
 import { NoteSnapshotCard } from './NoteSnapshotCard'
 import { VocabularyNotebook } from './VocabularyNotebook'
-import { BookOpen, Notebook, Plus, ChevronDown, Trash2, AlertCircle } from 'lucide-react'
+import { deleteNoteCompletely } from '../../services/deletion'
+import { BookOpen, Notebook, Plus, ChevronDown, Trash2, AlertCircle, BookMarked } from 'lucide-react'
 import { useI18n } from '../../i18n/useI18n'
 
 export function NotesPanel() {
@@ -14,7 +17,6 @@ export function NotesPanel() {
   const activeNoteId = useNoteStore((s) => s.activeNoteId)
   const setActiveNote = useNoteStore((s) => s.setActiveNote)
   const createNote = useNoteStore((s) => s.createNote)
-  const deleteNote = useNoteStore((s) => s.deleteNote)
   const videoHash = usePlayerStore((s) => s.videoHash)
   const screenshotKey = useSettingsStore((s) => s.shortcuts.takeScreenshot)
   const [noteSelectorOpen, setNoteSelectorOpen] = useState(false)
@@ -29,11 +31,24 @@ export function NotesPanel() {
     setNoteSelectorOpen(false)
   }
 
+  // #4 快捷跳转生词本：记录返回上下文，回到 Dashboard 后直接落到「单词本」视图。
+  const goToWordbook = () => {
+    useReviewStore.getState().setReturnToReview(true)
+    useAppStore.getState().setAppPhase('dashboard')
+  }
+
   const handleDeleteNote = (noteId: string, e: React.MouseEvent) => {
     e.stopPropagation()
     if (deleteConfirmId === noteId) {
-      deleteNote(noteId)
       setDeleteConfirmId(null)
+      // #10 级联：清理所有截图的缓存 + 该笔记保存的生词，再删笔记。
+      const note = notes.find((n) => n.id === noteId)
+      if (note) {
+        const isLast = notes.length === 1
+        deleteNoteCompletely(note)
+        // 删掉最后一本笔记后自动新建一本，保证当前视频的截图/笔记入口始终可用。
+        if (isLast && videoHash) createNote(videoHash)
+      }
     } else {
       setDeleteConfirmId(noteId)
     }
@@ -58,6 +73,15 @@ export function NotesPanel() {
         >
           <BookOpen size={12} />
           {t('layout.vocab')}
+        </button>
+        <button
+          onClick={goToWordbook}
+          title={t('notes.goToWordbook')}
+          className="ml-auto flex items-center gap-1 px-2.5 py-1.5 text-[0.6875rem] font-semibold rounded-lg
+                     text-primary hover:bg-primary/10 transition-all duration-200 cursor-pointer"
+        >
+          <BookMarked size={12} />
+          {t('notes.goToWordbook')}
         </button>
       </div>
 
@@ -95,24 +119,22 @@ export function NotesPanel() {
                           {t('notes.snaps', { n: note.snapshots.length })}
                         </span>
                       </button>
-                      {/* Delete button */}
-                      {notes.length > 1 && (
-                        <button
-                          onClick={(e) => handleDeleteNote(note.id, e)}
-                          className={`p-1 rounded-md transition-all duration-200 cursor-pointer
-                            ${deleteConfirmId === note.id
-                              ? 'bg-destructive/15 text-destructive'
-                              : 'text-muted-foreground/0 group-hover/note:text-muted-foreground/40 hover:bg-destructive/10 hover:text-destructive'
-                            }`}
-                          title={deleteConfirmId === note.id ? t('notes.confirmDelete') : t('notes.deleteNote')}
-                        >
-                          {deleteConfirmId === note.id ? (
-                            <AlertCircle size={11} />
-                          ) : (
-                            <Trash2 size={11} />
-                          )}
-                        </button>
-                      )}
+                      {/* Delete button — always available (#10: 单本笔记也可删除) */}
+                      <button
+                        onClick={(e) => handleDeleteNote(note.id, e)}
+                        className={`p-1 rounded-md transition-all duration-200 cursor-pointer
+                          ${deleteConfirmId === note.id
+                            ? 'bg-destructive/15 text-destructive'
+                            : 'text-muted-foreground/0 group-hover/note:text-muted-foreground/40 hover:bg-destructive/10 hover:text-destructive'
+                          }`}
+                        title={deleteConfirmId === note.id ? t('notes.confirmDelete') : t('notes.deleteNote')}
+                      >
+                        {deleteConfirmId === note.id ? (
+                          <AlertCircle size={11} />
+                        ) : (
+                          <Trash2 size={11} />
+                        )}
+                      </button>
                     </div>
                   ))}
                   <button

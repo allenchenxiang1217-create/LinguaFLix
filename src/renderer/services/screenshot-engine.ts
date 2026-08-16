@@ -107,9 +107,11 @@ export async function captureScreenshot(
       filePath = 'local://screenshot_' + Date.now()
     }
   } else {
-    // Web mode: try the HTTP backend
+    // Web mode: save via the same-origin /api proxy (dev Vite proxy, the static
+    // harness proxy, or a prod reverse proxy all forward /api/* to the backend).
+    // No hardcoded host/port, so it keeps working behind any proxy or deployment.
     try {
-      const res = await fetch('http://127.0.0.1:5176/api/screenshot/save', {
+      const res = await fetch('/api/screenshot/save', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ dataUrl, timestamp: currentTime }),

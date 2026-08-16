@@ -1,15 +1,17 @@
-import { useState, useMemo } from 'react'
+import { useState, useMemo, useRef } from 'react'
 import { useVocabularyStore } from '../../stores/vocabularyStore'
 import { usePlayerStore } from '../../stores/playerStore'
 import { useAppStore } from '../../stores/appStore'
 import { useSubtitleStore } from '../../stores/subtitleStore'
 import { formatTime } from '../../lib/time'
+import { deleteWordCompletely } from '../../services/deletion'
 import {
   BookOpen, Trash2, Play, ChevronRight, ChevronDown, CheckCircle2,
   ArrowDownAZ, FolderTree, Clock, RotateCcw
 } from 'lucide-react'
 import type { VocabWord } from '@shared/types'
 import { useI18n } from '../../i18n/useI18n'
+import { ConfirmDialog } from '../ui/ConfirmDialog'
 
 type SortMode = 'alpha' | 'video'
 type ReviewFilter = 'all' | 'due'
@@ -21,13 +23,15 @@ interface VocabularyNotebookProps {
 
 export function VocabularyNotebook({ currentVideoHash }: VocabularyNotebookProps) {
   const allWords = useVocabularyStore((s) => s.words)
-  const removeWord = useVocabularyStore((s) => s.removeWord)
   const reviewWord = useVocabularyStore((s) => s.reviewWord)
   const seek = usePlayerStore((s) => s.seek)
   const videos = useAppStore((s) => s.videos)
+  const pauseTimerRef = useRef<number>(0)
   const [expandedId, setExpandedId] = useState<string | null>(null)
   const [sortMode, setSortMode] = useState<SortMode>('alpha')
   const [reviewFilter, setReviewFilter] = useState<ReviewFilter>('all')
+  // #1 删除生词：确认悬浮窗（删除不可撤销，级联清理快照副本 + 孤儿截图缓存）
+  const [pendingDelete, setPendingDelete] = useState<VocabWord | null>(null)
   const { t } = useI18n()
 
   // #6 生词独立：侧栏只显示当前视频的生词；不传（或传空）则显示全部。
@@ -37,18 +41,28 @@ export function VocabularyNotebook({ currentVideoHash }: VocabularyNotebookProps
   )
   const scopedVideoName = currentVideoHash ? videos[currentVideoHash]?.fileName : null
 
-  // ── Remove word and clear from snapshot ──
-  const handleRemoveWord = (word: VocabWord) => {
-    removeWord(word.id)
+  // ── #1 删除生词：确认悬浮窗；级联清理快照副本 + 孤儿截图缓存 ──
+  const confirmRemoveWord = () => {
+    if (!pendingDelete) return
+    const w = pendingDelete
+    setPendingDelete(null)
+    deleteWordCompletely({ id: w.id, snapshotId: w.snapshotId, videoHash: w.videoHash })
   }
 
   // ── Jump to video at word's timestamp ──
   const handleJumpToWord = (word: VocabWord) => {
-    // #5 播放时自动隐藏字幕挡块，不遮挡画面；快捷键可随时再显示。
-    useSubtitleStore.getState().setBlockerVisible(false)
+    // #5 播放时自动隐藏字幕挡块，不遮挡画面；#4 记住原可见状态，6 秒自动暂停后还原。
+    const subtitleStore = useSubtitleStore.getState()
+    const wasBlockerVisible = subtitleStore.blockerVisible
+    if (wasBlockerVisible) subtitleStore.setBlockerVisible(false)
     const startTime = Math.max(0, word.videoTimestamp - 3)
     seek(startTime)
     usePlayerStore.getState().play()
+    clearTimeout(pauseTimerRef.current)
+    pauseTimerRef.current = window.setTimeout(() => {
+      usePlayerStore.getState().pause()
+      if (wasBlockerVisible) useSubtitleStore.getState().setBlockerVisible(true)
+    }, 6000)
   }
 
   // ── Review with SM-2 ──
@@ -303,8 +317,9 @@ export function VocabularyNotebook({ currentVideoHash }: VocabularyNotebookProps
 
                         <div className="flex-1" />
                         <button
-                          onClick={() => handleRemoveWord(word)}
+                          onClick={() => setPendingDelete(word)}
                           className="p-1.5 rounded-lg hover:bg-destructive/10 transition-colors cursor-pointer"
+                          title={t('notes.deleteWordHint')}
                         >
                           <Trash2 size={11} className="text-muted-foreground/40 hover:text-destructive" />
                         </button>
@@ -318,6 +333,17 @@ export function VocabularyNotebook({ currentVideoHash }: VocabularyNotebookProps
         ))
       )}
       </div>
+
+      {/* 删除生词确认悬浮窗 */}
+      <ConfirmDialog
+        open={!!pendingDelete}
+        title={t('notes.confirm.title')}
+        message={t('notes.confirm.msg')}
+        confirmLabel={t('notes.confirm.delete')}
+        cancelLabel={t('notes.confirm.cancel')}
+        onConfirm={confirmRemoveWord}
+        onCancel={() => setPendingDelete(null)}
+      />
     </div>
   )
 }

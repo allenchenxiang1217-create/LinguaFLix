@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from 'react'
 import { apiCall } from './stream-resolver'
 import { useSettingsStore } from '../stores/settingsStore'
+import { getPhraseGloss } from '../lib/phrases'
 
 /**
  * 生词释义拉取 + 缓存（跟随界面语言）。
@@ -132,6 +133,10 @@ async function lookupEnOnline(word: string): Promise<string | null> {
 
 /** 查一次词，返回 {zh, en}：中英、英英各自「在线优先，离线兜底」，并行。 */
 async function lookupGloss(key: string): Promise<GlossEntry> {
+  // #3 离线模式：完全跳过在线，只查内置 ECDICT。
+  if (useSettingsStore.getState().dictMode === 'offline') {
+    return lookupLocal(key)
+  }
   const [zh, en] = await Promise.all([
     (async () => (await lookupZhOnline(key)) ?? (await lookupLocal(key)).zh)(),
     (async () => (await lookupEnOnline(key)) ?? (await lookupLocal(key)).en)(),
@@ -139,12 +144,24 @@ async function lookupGloss(key: string): Promise<GlossEntry> {
   return { zh, en }
 }
 
+/**
+ * 精选词组释义兜底（#5）：词组不在缓存里、词典也查不到时，用内置词组表的中文释义。
+ * 只作为「首次同步渲染」的值与最终兜底；在线/离线查词命中后仍以查词结果为准。
+ */
+function phraseGloss(key: string, lang: string): string | null | undefined {
+  const p = getPhraseGloss(key)
+  if (!p) return undefined
+  return lang === 'zh' ? p.zh : null // 英文界面无 en 释义时返回 null（空白，不强造）
+}
+
 /** 返回 undefined = 尚未查询；string|null = 已缓存的结果（null 表示无释义）。 */
 export function getCachedGloss(word: string): string | null | undefined {
   ensurePersisted()
+  const lang = useSettingsStore.getState().language
   const e = memCache.get(word.trim().toLowerCase())
-  if (e === undefined) return undefined
-  return e[useSettingsStore.getState().language]
+  if (e !== undefined) return e[lang]
+  // 词组表的精选释义同步可读（离线优先，不阻塞 UI）。
+  return phraseGloss(word.trim().toLowerCase(), lang)
 }
 
 /** 取一个词在当前界面语言下的释义（命中缓存立即返回，否则查询并写回缓存）。 */
@@ -152,12 +169,18 @@ export async function getGloss(word: string): Promise<string | null> {
   const key = word.trim().toLowerCase()
   if (!key) return null
   ensurePersisted()
+  const lang = useSettingsStore.getState().language
   const cached = memCache.get(key)
-  if (cached !== undefined) return cached[useSettingsStore.getState().language]
+  if (cached !== undefined) return cached[lang]
   const gloss = await lookupGloss(key)
-  memCache.set(key, gloss)
+  // 查词结果全空时回退到内置词组释义（如 give up 这类 ECDICT 缺失的词组）。
+  const enriched: GlossEntry = {
+    zh: gloss.zh ?? phraseGloss(key, 'zh') ?? null,
+    en: gloss.en ?? phraseGloss(key, 'en') ?? null,
+  }
+  memCache.set(key, enriched)
   persist()
-  return gloss[useSettingsStore.getState().language]
+  return enriched[lang]
 }
 
 /** 清空全部释义缓存（内存 + localStorage），下次查询重新请求。 */
@@ -200,7 +223,7 @@ export function useWordGlosses(words: string[]): Record<string, string | null> {
   const glosses: Record<string, string | null> = {}
   for (const k of keys) {
     const e = memCache.get(k)
-    glosses[k] = e ? e[language] : null
+    glosses[k] = e ? e[language] : (phraseGloss(k, language) ?? null)
   }
   return glosses
 }

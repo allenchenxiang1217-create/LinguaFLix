@@ -6,6 +6,7 @@ import { useVocabularyStore } from '../../stores/vocabularyStore'
 import { useNoteStore } from '../../stores/noteStore'
 import { usePlayerStore } from '../../stores/playerStore'
 import { getProvider, normalizeBaseUrl } from '../../services/ai-providers'
+import { streamOpenAI, streamClaude } from '../../services/ai-stream'
 
 interface AIVocabAnalysisProps {
   word: string
@@ -53,11 +54,16 @@ export function AIVocabAnalysis({
     const controller = new AbortController()
     abortRef.current = controller
 
+    const opts = {
+      word, sentence, ctxBefore: contextBefore, ctxAfter: contextAfter,
+      onChunk: (c: string) => setAnalysis((prev) => prev + c),
+      signal: controller.signal, language, t,
+    }
     try {
       if (p.type === 'openai') {
-        await streamOpenAI(baseUrl, apiKey, aiModel.trim(), word, sentence, contextBefore, contextAfter, (c) => setAnalysis(prev => prev + c), controller.signal, language, t)
+        await streamOpenAI(baseUrl, apiKey, aiModel.trim(), opts)
       } else {
-        await streamClaude(baseUrl, apiKey, aiModel.trim(), word, sentence, contextBefore, contextAfter, (c) => setAnalysis(prev => prev + c), controller.signal, language, t)
+        await streamClaude(baseUrl, apiKey, aiModel.trim(), opts)
       }
     } catch (err: any) {
       if (err.name !== 'AbortError') {
@@ -161,78 +167,4 @@ export function AIVocabAnalysis({
       </div>
     </div>
   )
-}
-
-// ── Streaming ──
-
-async function streamOpenAI(baseUrl: string, apiKey: string, model: string, word: string, sentence: string, ctxBefore: string, ctxAfter: string, onChunk: (t: string) => void, signal?: AbortSignal, language?: UILanguage, t?: (key: string, vars?: Record<string, string | number>) => string) {
-  const res = await fetch(`${baseUrl}/chat/completions`, {
-    method: 'POST', headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${apiKey}` },
-    body: JSON.stringify({ model, messages: [{ role: 'user', content: buildPrompt(word, sentence, ctxBefore, ctxAfter, language || 'en') }], stream: true, max_tokens: 600, temperature: 0.7 }),
-    signal,
-  })
-  if (!res.ok) throw new Error(t ? t('ai.openaiError', { status: res.status }) : `API error: ${res.status}`)
-  const reader = res.body?.getReader(); if (!reader) return
-  const d = new TextDecoder(); let b = ''
-  while (true) {
-    if (signal?.aborted) throw new DOMException('Aborted', 'AbortError')
-    const { done, value } = await reader.read(); if (done) break
-    b += d.decode(value, { stream: true }); const lines = b.split('\n'); b = lines.pop() || ''
-    for (const line of lines) {
-      if (!line.startsWith('data: ')) continue
-      if (line.slice(6) === '[DONE]') return
-      try { const c = JSON.parse(line.slice(6)).choices?.[0]?.delta?.content; if (c) onChunk(c) } catch {}
-    }
-  }
-}
-
-async function streamClaude(baseUrl: string, apiKey: string, model: string, word: string, sentence: string, ctxBefore: string, ctxAfter: string, onChunk: (t: string) => void, signal?: AbortSignal, language?: UILanguage, t?: (key: string, vars?: Record<string, string | number>) => string) {
-  const res = await fetch(`${baseUrl}/messages`, {
-    method: 'POST', headers: { 'Content-Type': 'application/json', 'x-api-key': apiKey, 'anthropic-version': '2023-06-01' },
-    body: JSON.stringify({ model, max_tokens: 600, messages: [{ role: 'user', content: buildPrompt(word, sentence, ctxBefore, ctxAfter, language || 'en') }], stream: true }),
-    signal,
-  })
-  if (!res.ok) throw new Error(t ? t('ai.claudeError', { status: res.status }) : `API error: ${res.status}`)
-  const reader = res.body?.getReader(); if (!reader) return
-  const d = new TextDecoder(); let b = ''
-  while (true) {
-    if (signal?.aborted) throw new DOMException('Aborted', 'AbortError')
-    const { done, value } = await reader.read(); if (done) break
-    b += d.decode(value, { stream: true }); const lines = b.split('\n'); b = lines.pop() || ''
-    for (const line of lines) {
-      if (!line.startsWith('data: ')) continue
-      try { const p = JSON.parse(line.slice(6)); if (p.type === 'content_block_delta') { const t = p.delta?.text; if (t) onChunk(t) } } catch {}
-    }
-  }
-}
-
-function buildPrompt(word: string, sentence: string, ctxBefore: string, ctxAfter: string, lang: UILanguage): string {
-  const ctx = []
-  if (ctxBefore) ctx.push(lang === 'zh' ? `上一句："${ctxBefore}"` : `Previous: "${ctxBefore}"`)
-  ctx.push(lang === 'zh' ? `当前句："${sentence}"` : `Current: "${sentence}"`)
-  if (ctxAfter) ctx.push(lang === 'zh' ? `下一句："${ctxAfter}"` : `Next: "${ctxAfter}"`)
-
-  if (lang === 'zh') {
-    return `你是一位专业的英语老师。请分析视频字幕句子中出现的单词 **"${word}"**：
-
-${ctx.join('\n')}
-
-请说明：
-1. **"${word}"** 在此语境下的具体含义
-2. 说话者为什么选这个词——它带来了什么语气或细微差别
-3. 1-2 个常见搭配或相近表达
-
-用中文回答，简洁（3-5 句），语气自然、适合初学者，重点说明学习者在正确使用这个词时需要理解什么。`
-  }
-
-  return `You are an expert English teacher. Analyze the word **"${word}"** in this sentence from a video:
-
-${ctx.join('\n')}
-
-Explain:
-1. The specific meaning of **"${word}"** in this context
-2. Why the speaker chose this word — what nuance or tone does it add
-3. 1-2 common collocations or similar expressions
-
-Be concise (3-5 sentences), natural tone, beginner-friendly. Focus on what a learner needs to understand to USE this word correctly.`
 }

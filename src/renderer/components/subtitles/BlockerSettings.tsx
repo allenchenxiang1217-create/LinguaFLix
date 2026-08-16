@@ -3,6 +3,7 @@ import { useSubtitleStore } from '../../stores/subtitleStore'
 import { Eye, EyeOff, Lock, LockOpen, RotateCcw } from 'lucide-react'
 import type { BlockerConfig, BlockerEffect } from '@shared/types'
 import { useI18n } from '../../i18n/useI18n'
+import { portalTarget } from '../../lib/portal'
 
 /**
  * Quick position presets. The blocker is draggable/resizable on the video, but
@@ -138,6 +139,6 @@ export function BlockerPanel({ top, left, onClose }: { top: number; left: number
         </div>
       </div>
     </>,
-    document.body,
+    portalTarget(),
   )
 }

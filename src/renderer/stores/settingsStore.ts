@@ -4,6 +4,8 @@ import type { AIOverride } from '../services/ai-providers'
 export type UILanguage = 'zh' | 'en'
 export type SubtitleSize = 'sm' | 'md' | 'lg'
 export type ThemeMode = 'dark' | 'light'
+/** 词典服务模式：#3 在线（更便捷，需联网）或离线（更稳定，安装包更大，走内置 ECDICT）。 */
+export type DictMode = 'online' | 'offline'
 
 // ── 快捷键（#2 可配置） ──
 
@@ -59,6 +61,9 @@ interface SettingsState {
   // OCR
   ocrLanguage: string           // default 'eng'
 
+  // 词典
+  dictMode: DictMode            // #3 离线 / 在线词典服务，default 'online'
+
   // UI
   language: UILanguage          // 界面语言，default 'zh'
   themeMode: ThemeMode          // 深浅色（白天/黑夜），default 'dark'（现状即深色）
@@ -89,6 +94,7 @@ const DEFAULTS: SettingsState = {
   aiModel: '',
   aiOverrides: {},
   ocrLanguage: 'eng',
+  dictMode: 'online',
   language: 'zh',
   themeMode: 'dark',
   theme: 'blue',
@@ -135,6 +141,7 @@ function persistSettings(s: SettingsState) {
         aiModel: s.aiModel,
         aiOverrides: s.aiOverrides,
         ocrLanguage: s.ocrLanguage,
+        dictMode: s.dictMode,
         language: s.language,
         themeMode: s.themeMode,
         theme: s.theme,

@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 import { VideoPanel } from './VideoPanel'
 import { NotesPanel } from '../sidebar/NotesPanel'
 import { Toast } from '../Toast'
@@ -7,11 +7,14 @@ import { useNoteStore } from '../../stores/noteStore'
 import { usePlayerStore } from '../../stores/playerStore'
 import { useAppStore } from '../../stores/appStore'
 import { useKeyboardShortcuts } from '../../hooks/useKeyboardShortcuts'
+import { SettingsPage } from '../dashboard/SettingsPage'
 import { useI18n } from '../../i18n/useI18n'
 
 export function AppLayout() {
-  useKeyboardShortcuts()
   const { t } = useI18n()
+  // #2 视频内进设置：弹层开关。打开时暂停播放器快捷键，避免设置里误触。
+  const [settingsOpen, setSettingsOpen] = useState(false)
+  useKeyboardShortcuts(settingsOpen)
 
   const sidebarMode = useNoteStore((s) => s.sidebarMode)
   const sidebarHovered = useNoteStore((s) => s.sidebarHovered)
@@ -91,7 +94,7 @@ export function AppLayout() {
     <div className="flex h-screen w-screen bg-background overflow-hidden">
       {/* Main video area */}
       <div className="flex-1 flex flex-col min-w-0">
-        <VideoPanel onBack={() => setAppPhase('dashboard')} />
+        <VideoPanel onBack={() => setAppPhase('dashboard')} onOpenSettings={() => setSettingsOpen(true)} />
       </div>
 
       {/* ── Narrow column (always visible when not fullscreen) ── */}
@@ -170,6 +173,36 @@ export function AppLayout() {
 
       {/* Global toast */}
       <Toast />
+
+      {/* #2 视频内进设置：全屏弹层，复用整页 SettingsPage（读写同一 settingsStore，改动即时生效）。 */}
+      {settingsOpen && (
+        <div
+          className="fixed inset-0 z-[70] flex items-center justify-center bg-black/60 backdrop-blur-sm animate-fade-in"
+          onClick={() => setSettingsOpen(false)}
+        >
+          <div
+            className="relative w-full max-w-3xl max-h-[88vh] overflow-hidden rounded-2xl glass-deep border border-border/60
+                       shadow-2xl shadow-black/50 flex flex-col"
+            onClick={(e) => e.stopPropagation()}
+          >
+            {/* 弹层头部 */}
+            <div className="flex items-center justify-between px-5 py-3 border-b border-border/40 shrink-0">
+              <h2 className="text-[0.9375rem] font-semibold tracking-tight text-foreground">{t('settings.title')}</h2>
+              <button
+                onClick={() => setSettingsOpen(false)}
+                className="p-1.5 rounded-lg hover:bg-foreground/10 text-muted-foreground hover:text-foreground transition-colors cursor-pointer"
+                aria-label={t('dashboard.close')}
+              >
+                <X size={16} />
+              </button>
+            </div>
+            {/* 可滚动内容区 */}
+            <div className="flex-1 overflow-y-auto px-6 py-6">
+              <SettingsPage />
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   )
 }

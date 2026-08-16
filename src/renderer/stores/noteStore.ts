@@ -1,7 +1,7 @@
 import { create } from 'zustand'
 import type { Note, SnapshotEntry, VocabWord, OCRRegion } from '@shared/types'
 import { OCRService, applyCorrections, learnCorrection } from '../services/ocr-service'
-import { saveNotebook, VideoOcrRegionStorage, OcrCorrectionStorage } from '../services/storage-service'
+import { saveNotebook, ScreenshotStorage, VideoOcrRegionStorage, OcrCorrectionStorage } from '../services/storage-service'
 
 // Default subtitle OCR region — covers the bottom strip of the frame so its
 // lower edge reaches the video bottom (y+h === 1), where subtitles usually sit.
@@ -60,11 +60,17 @@ interface NoteActions {
   updateSnapshotText: (snapshotId: string, ocrText: string, isCorrected: boolean) => void
   updateSnapshotNote: (snapshotId: string, userNote: string) => void
   updateSnapshotRegion: (snapshotId: string, region: OCRRegion) => void
+  /** #10 删除单个快照（截图条目），返回被删快照（供级联清理截图缓存/生词）。 */
+  removeSnapshot: (noteId: string, snapshotId: string) => SnapshotEntry | null
 
   // Words
   addWordToSnapshot: (snapshotId: string, word: VocabWord) => void
   /** #10 单词级批注：同步更新快照内该词的副本（与单词本条目 id 一致）。 */
   updateSnapshotWordNote: (snapshotId: string, wordId: string, userNote: string) => void
+  /** #1 删除快照内该生词的副本（不影响同句其它生词），返回删除后快照内剩余生词数。 */
+  removeWordFromSnapshot: (snapshotId: string, wordId: string) => number
+  /** 按 id 查找快照（级联删除时用来取 filePath）。 */
+  getSnapshot: (snapshotId: string) => SnapshotEntry | null
 
   // OCR
   enqueueOCR: (item: OCRQueueItem) => void
@@ -104,6 +110,10 @@ function findNoteForSnapshot(notes: Note[], snapshotId: string): string | null {
   }
   return null
 }
+
+// Debounced auto-save timer. Declared above the store so actions (clearNotebook /
+// loadNotebook) can flush it before tearing down or switching the current video.
+let saveTimer: ReturnType<typeof setTimeout> | null = null
 
 export const useNoteStore = create<NoteState & NoteActions>((set, get) => ({
   notes: [],
@@ -163,6 +173,11 @@ export const useNoteStore = create<NoteState & NoteActions>((set, get) => ({
       createdAt: input.createdAt || Date.now(),
     }
     const { activeNoteId } = get()
+    // #6 缩略图即时落库：截图一生成就写入 localStorage，即使后续整本笔记的
+    // 防抖保存还没跑（或被快速导航打断），单词本里的缩略图也不会丢。
+    if (activeNoteId && (input.thumbnailDataUrl || input.imageDataUrl)) {
+      ScreenshotStorage.save(id, input.thumbnailDataUrl || input.imageDataUrl)
+    }
     set((s) => {
       if (!activeNoteId) {
         // No active note — create one? The caller should have created a note already.
@@ -233,6 +248,21 @@ export const useNoteStore = create<NoteState & NoteActions>((set, get) => ({
     })
   },
 
+  removeSnapshot: (noteId, snapshotId) => {
+    const s = get()
+    const note = s.notes.find((n) => n.id === noteId)
+    const snap = note?.snapshots.find((sn) => sn.id === snapshotId) ?? null
+    if (!note || !snap) return null
+    set((state) => ({
+      notes: state.notes.map((n) =>
+        n.id === noteId
+          ? { ...n, snapshots: n.snapshots.filter((sn) => sn.id !== snapshotId), updatedAt: Date.now() }
+          : n,
+      ),
+    }))
+    return snap
+  },
+
   // ── Words ──
 
   addWordToSnapshot: (snapshotId, word) => {
@@ -268,6 +298,30 @@ export const useNoteStore = create<NoteState & NoteActions>((set, get) => ({
       }))
       return { notes }
     })
+  },
+
+  removeWordFromSnapshot: (snapshotId, wordId) => {
+    const s = get()
+    const noteId = findNoteForSnapshot(s.notes, snapshotId)
+    if (!noteId) return 0
+    const notes = mapNoteUpdating(s.notes, noteId, (n) => ({
+      ...n,
+      snapshots: n.snapshots.map((sn) =>
+        sn.id === snapshotId ? { ...sn, words: sn.words.filter((w) => w.id !== wordId) } : sn,
+      ),
+    }))
+    const note = notes.find((n) => n.id === noteId)
+    const snap = note?.snapshots.find((sn) => sn.id === snapshotId)
+    set({ notes })
+    return snap?.words.length ?? 0
+  },
+
+  getSnapshot: (snapshotId) => {
+    for (const n of get().notes) {
+      const snap = n.snapshots.find((sn) => sn.id === snapshotId)
+      if (snap) return snap
+    }
+    return null
   },
 
   // ── OCR Queue ──
@@ -330,31 +384,45 @@ export const useNoteStore = create<NoteState & NoteActions>((set, get) => ({
 
   // ── Persistence ──
 
-  loadNotebook: (notes, videoHash) => set({ notes, activeNoteId: notes[0]?.id || null, currentVideoHash: videoHash }),
+  loadNotebook: (notes, videoHash) => {
+    // #10(c) 切换视频前先把上一个视频的笔记落库，避免防抖保存被新视频冲掉。
+    const prev = get()
+    if (prev.currentVideoHash && prev.currentVideoHash !== videoHash && prev.notes.length > 0) {
+      saveNotebook(prev.currentVideoHash, prev.notes)
+    }
+    if (saveTimer) { clearTimeout(saveTimer); saveTimer = null }
+    set({ notes, activeNoteId: notes[0]?.id || null, currentVideoHash: videoHash })
+  },
 
-  clearNotebook: () => set({
-    notes: [],
-    activeNoteId: null,
-    currentVideoHash: null,
-    ocrQueue: [],
-    ocrPending: {},
-    sidebarMode: 'narrow',
-    sidebarHovered: false,
-    videoOcrRegion: null,
-  }),
+  clearNotebook: () => {
+    // #10(c) 清空前先把待防抖保存的笔记落库，避免快速退出时笔记被吞掉。
+    const { currentVideoHash, notes } = get()
+    if (currentVideoHash && notes.length > 0) saveNotebook(currentVideoHash, notes)
+    if (saveTimer) { clearTimeout(saveTimer); saveTimer = null }
+    set({
+      notes: [],
+      activeNoteId: null,
+      currentVideoHash: null,
+      ocrQueue: [],
+      ocrPending: {},
+      sidebarMode: 'narrow',
+      sidebarHovered: false,
+      videoOcrRegion: null,
+    })
+  },
 }))
 
 // ── Auto-persistence: debounced save to localStorage on every state change ──
-
-let saveTimer: ReturnType<typeof setTimeout> | null = null
 
 useNoteStore.subscribe((state) => {
   const { currentVideoHash, notes } = state
   if (!currentVideoHash || notes.length === 0) return
 
-  // Debounce saves by 1 second to avoid thrashing localStorage
+  // Debounce saves to avoid thrashing localStorage; clearNotebook / loadNotebook
+  // flush synchronously so fast navigation never loses the outgoing notes.
   if (saveTimer) clearTimeout(saveTimer)
   saveTimer = setTimeout(() => {
+    saveTimer = null
     saveNotebook(currentVideoHash, notes)
-  }, 1000)
+  }, 800)
 })

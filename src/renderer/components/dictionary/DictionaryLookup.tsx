@@ -30,29 +30,45 @@ function mapEnPos(pos?: string): string {
   }
 }
 
-/** 有道中英在线（桌面走 IPC，web 走 /api/dict/zh 代理）。失败返回 null，绝不抛出。 */
+/** 在线查询超时（毫秒）：到点返回 null，避免断网/限流时释义长时间卡住（#3 崩溃根因之一）。 */
+const ONLINE_TIMEOUT_MS = 4000
+
+function withTimeout<T>(p: Promise<T>, ms: number): Promise<T | null> {
+  return Promise.race([
+    p,
+    new Promise<null>((resolve) => { setTimeout(() => resolve(null), ms) }),
+  ])
+}
+
+/** 有道中英在线（桌面走 IPC，web 走 /api/dict/zh 代理）。失败/超时返回 null，绝不抛出。 */
 async function lookupZhOnline(word: string, api: any): Promise<ZhDictResult | null> {
   try {
-    if (api?.lookupZhDict) {
-      const r = await api.lookupZhDict(word)
-      if (r.error || !r.data) return null
-      return r.data as ZhDictResult
-    }
-    const r = await apiCall<any>(`/api/dict/zh?word=${encodeURIComponent(word)}`)
-    if (r.error || !r.data) return null
-    return r.data as ZhDictResult
+    const r = await withTimeout((async () => {
+      if (api?.lookupZhDict) {
+        const res = await api.lookupZhDict(word)
+        return (res.error || !res.data) ? null : res.data as ZhDictResult
+      }
+      const res = await apiCall<any>(`/api/dict/zh?word=${encodeURIComponent(word)}`)
+      return (res.error || !res.data) ? null : res.data as ZhDictResult
+    })(), ONLINE_TIMEOUT_MS)
+    return r
   } catch {
     return null
   }
 }
 
-/** 英英在线（dictionaryapi.dev，CORS 友好）。失败返回 null。 */
-async function lookupEnOnline(word: string): Promise<DictionaryResult | null> {
+/** 英英在线（dictionaryapi.dev，CORS 偶发 → 桌面 IPC / web /api/dict/en 代理）。失败/超时返回 null。 */
+async function lookupEnOnline(word: string, api: any): Promise<DictionaryResult | null> {
   try {
-    const res = await fetch(`https://api.dictionaryapi.dev/api/v2/entries/en/${encodeURIComponent(word)}`)
-    if (!res.ok) return null
-    const arr = await res.json()
-    return (arr?.[0] as DictionaryResult) ?? null
+    const r = await withTimeout((async () => {
+      if (api?.lookupEnDict) {
+        const res = await api.lookupEnDict(word)
+        return (res.error || !res.data) ? null : res.data as DictionaryResult
+      }
+      const res = await apiCall<any>(`/api/dict/en?word=${encodeURIComponent(word)}`)
+      return (res.error || !res.data) ? null : res.data as DictionaryResult
+    })(), ONLINE_TIMEOUT_MS)
+    return r
   } catch {
     return null
   }
@@ -82,6 +98,7 @@ function mergeEn(base: DictionaryResult, online: DictionaryResult | null): Dicti
 
 export function DictionaryLookup({ word }: DictionaryLookupProps) {
   const language = useSettingsStore((s) => s.language)
+  const dictMode = useSettingsStore((s) => s.dictMode)
   const { t } = useI18n()
   const [result, setResult] = useState<DictionaryResult | null>(null)
   const [zhResult, setZhResult] = useState<ZhDictResult | null>(null)
@@ -91,6 +108,8 @@ export function DictionaryLookup({ word }: DictionaryLookupProps) {
   const lookup = useCallback(async (w: string) => {
     setLoading(true); setError(null); setResult(null); setZhResult(null)
     const api = (window as any).electronAPI
+    // #3 离线模式：完全跳过在线服务，只查内置 ECDICT。
+    const online = dictMode === 'online'
     try {
       // 1. Offline ECDICT (bundled SQLite, rich) — desktop (IPC) or web (HTTP backend).
       let local: any = null
@@ -111,8 +130,8 @@ export function DictionaryLookup({ word }: DictionaryLookupProps) {
           // ① 离线中英先出（离线优先）
           const base: ZhDictResult = { word: local.word || w, phonetic: local.phonetic, translations: local.zh, examples: [] }
           setLoading(false); setZhResult(base)
-          // ② 在线补全：有道例句/音标（桌面 IPC 或 web /api/dict/zh 代理）
-          setZhResult(mergeZh(base, await lookupZhOnline(w, api)))
+          // ② 在线补全：有道例句/音标（离线模式跳过）
+          if (online) setZhResult(mergeZh(base, await lookupZhOnline(w, api)))
           return
         }
         if (language === 'en' && local.en?.length) {
@@ -127,27 +146,27 @@ export function DictionaryLookup({ word }: DictionaryLookupProps) {
             })),
           }
           setLoading(false); setResult(base)
-          // ② 在线补全：dictionaryapi.dev 完整释义/例句/近义词/发音
-          setResult(mergeEn(base, await lookupEnOnline(w)))
+          // ② 在线补全：dictionaryapi.dev 完整释义/例句/近义词/发音（离线模式跳过）
+          if (online) setResult(mergeEn(base, await lookupEnOnline(w, api)))
           return
         }
         // Local hit but no senses for this language — fall through to online.
       }
 
-      // 2. Online-only fallback (no usable offline senses).
+      // 2. Online-only fallback (no usable offline senses). 离线模式：无离线释义即 not_found。
       if (language === 'zh') {
-        const r = await lookupZhOnline(w, api)
+        const r = online ? await lookupZhOnline(w, api) : null
         if (!r) throw new Error('not_found')
         setZhResult(r)
       } else {
-        const r = await lookupEnOnline(w)
+        const r = online ? await lookupEnOnline(w, api) : null
         if (!r) throw new Error('not_found')
         setResult(r)
       }
     } catch (err: any) {
       setError(err?.message === 'not_found' ? 'not_found' : 'failed')
     } finally { setLoading(false) }
-  }, [language])
+  }, [language, dictMode])
 
   useEffect(() => { if (word) lookup(word) }, [word, lookup])
 

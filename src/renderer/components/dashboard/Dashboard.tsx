@@ -14,12 +14,13 @@ import { formatTime } from '../../lib/time'
 import { LogoMark, Wordmark } from '../Logo'
 import { SettingsPage } from './SettingsPage'
 import { ReviewQueue } from '../review/ReviewQueue'
+import { AutoClipSection } from './AutoClipSection'
 import { useI18n } from '../../i18n/useI18n'
 import { useSettingsStore } from '../../stores/settingsStore'
 import {
   Play, BookOpen, Plus, Clock, BookMarked, Film,
-  Trash2, AlertCircle, Search, Library, HelpCircle, Flame, X, Settings,
-  NotebookPen, BookOpenText, Moon, Sun
+  Trash2, AlertCircle, Search, Library, HelpCircle, Flame, Settings,
+  NotebookPen, BookOpenText, Moon, Sun, Scissors
 } from 'lucide-react'
 
 // 六种影片标题卡式氛围底，按视频 hash 稳定映射，保证同一视频每次打开缩略图颜色一致。
@@ -39,8 +40,7 @@ export function Dashboard() {
   const [deleteConfirmHash, setDeleteConfirmHash] = useState<string | null>(null)
   const [loadError, setLoadError] = useState<string | null>(null)
   const [search, setSearch] = useState('')
-  const [showTutorial, setShowTutorial] = useState(false)
-  const [navView, setNavView] = useState<'library' | 'recent' | 'review' | 'settings'>('library')
+  const [navView, setNavView] = useState<'library' | 'recent' | 'review' | 'clip' | 'settings' | 'tutorial'>('library')
   const themeMode = useSettingsStore((s) => s.themeMode)
   const setThemeMode = useSettingsStore((s) => s.setSetting)
   const continueRef = useRef<HTMLDivElement>(null)
@@ -194,7 +194,7 @@ export function Dashboard() {
       {/* ── 侧栏 ── */}
       <aside className="w-56 shrink-0 glass-deep border-r border-border/60 flex flex-col z-20">
         <div className="flex items-center gap-2.5 px-4 h-14">
-          <LogoMark size={22} className="text-foreground" />
+          <LogoMark size={18} className="text-foreground" />
           <span className="text-[0.9375rem] font-semibold tracking-tight">
             <Wordmark />
           </span>
@@ -228,6 +228,13 @@ export function Dashboard() {
             )}
           </button>
           <button
+            onClick={() => { setDeleteConfirmHash(null); setSearch(''); setNavView('clip') }}
+            className={`${navBase} ${navView === 'clip' ? 'bg-foreground/9 text-foreground font-semibold' : 'text-muted-foreground hover:bg-foreground/5 hover:text-foreground'}`}
+          >
+            <Scissors size={16} className="opacity-70" />
+            {t('dashboard.nav.clip')}
+          </button>
+          <button
             onClick={() => { setDeleteConfirmHash(null); setSearch(''); setNavView('settings') }}
             className={`${navBase} ${navView === 'settings' ? 'bg-foreground/9 text-foreground font-semibold' : 'text-muted-foreground hover:bg-foreground/5 hover:text-foreground'}`}
           >
@@ -248,8 +255,8 @@ export function Dashboard() {
             {themeMode === 'dark' ? t('settings.appearance.dark') : t('settings.appearance.light')}
           </button>
           <button
-            onClick={() => setShowTutorial((v) => !v)}
-            className={`${navBase} text-muted-foreground hover:bg-foreground/5 hover:text-foreground ${showTutorial ? 'text-foreground' : ''}`}
+            onClick={() => { setDeleteConfirmHash(null); setSearch(''); setNavView('tutorial') }}
+            className={`${navBase} ${navView === 'tutorial' ? 'bg-foreground/9 text-foreground font-semibold' : 'text-muted-foreground hover:bg-foreground/5 hover:text-foreground'}`}
           >
             <HelpCircle size={16} className="opacity-70" />
             {t('dashboard.nav.tutorial')}
@@ -266,12 +273,16 @@ export function Dashboard() {
               ? t('dashboard.recent.title')
               : navView === 'review'
                 ? t('dashboard.nav.review')
-                : navView === 'settings'
-                  ? t('dashboard.nav.settings')
-                  : t('dashboard.header.title')}
+                : navView === 'clip'
+                  ? t('dashboard.nav.clip')
+                  : navView === 'settings'
+                    ? t('dashboard.nav.settings')
+                    : navView === 'tutorial'
+                    ? t('dashboard.nav.tutorial')
+                    : t('dashboard.header.title')}
           </h1>
           <div className="flex-1" />
-          {navView !== 'settings' && (
+          {navView !== 'settings' && navView !== 'clip' && navView !== 'tutorial' && (
             <div className="relative hidden sm:block">
               <Search size={14} className="absolute left-3 top-1/2 -translate-y-1/2 text-muted-foreground/50" />
               <input
@@ -499,6 +510,9 @@ export function Dashboard() {
             {/* 设置：整页视图（自包含组件，内部读改写 settingsStore） */}
             {navView === 'settings' && <SettingsPage />}
 
+            {/* 自动剪辑复习视频：独立顶层栏目（#10） */}
+            {navView === 'clip' && <AutoClipSection onOpenVideo={openVideo} />}
+
             {/* #22 泛搜索：搜索命中生词 → 生词结果分组（点击跳转到标记时间戳） */}
             {navView === 'library' && searchQuery && matchingWords.length > 0 && (
               <div className="space-y-3">
@@ -599,30 +613,8 @@ export function Dashboard() {
               </div>
             )}
 
-            {/* 使用教程（弹层，默认收起） */}
-            {showTutorial && (
-              <div
-                className="fixed inset-0 z-50 flex items-center justify-center p-6 bg-black/50"
-                onClick={() => setShowTutorial(false)}
-              >
-                <div
-                  className="relative glass-deep rounded-2xl w-full max-w-2xl max-h-[85vh] overflow-y-auto"
-                  onClick={(e) => e.stopPropagation()}
-                >
-                  <button
-                    onClick={() => setShowTutorial(false)}
-                    className="absolute top-3 right-3 z-20 p-1.5 rounded-lg hover:bg-foreground/10 text-muted-foreground
-                               hover:text-foreground transition-colors cursor-pointer"
-                    aria-label={t('dashboard.close')}
-                  >
-                    <X size={16} />
-                  </button>
-                  <div className="p-4">
-                    <UsageTutorial />
-                  </div>
-                </div>
-              </div>
-            )}
+            {/* 使用教程：与 设置/待复习 同级的一级页面（非弹层） */}
+            {navView === 'tutorial' && <UsageTutorial defaultOpen />}
 
           </div>
         </div>

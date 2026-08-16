@@ -99,10 +99,18 @@ export const useAppStore = create<AppState & AppActions>((set, get) => {
           lastVideoHash: lastVideoHash === hash ? null : lastVideoHash,
         }
       })
-      // Clean up associated notebook and screenshots from localStorage
-      deleteNotebook(hash)
+      // Clean up associated notebook and screenshots from localStorage + disk
+      void deleteNotebook(hash)
       localStorage.removeItem(`linguaflix-screenshots-${hash}`)
-      get().persistAppData()
+      // Persist with an explicit delete: persistAppData's union-merge would
+      // otherwise resurrect the removed hash from a stale copy held by another tab.
+      const persisted = AppStorage.load()
+      const merged = { ...(persisted.videos || {}), ...get().videos }
+      delete merged[hash]
+      AppStorage.save({
+        videos: merged,
+        lastVideoHash: get().lastVideoHash ?? persisted.lastVideoHash ?? null,
+      })
     },
 
     setAppPhase: (phase) => set({ appPhase: phase }),
@@ -142,7 +150,31 @@ export const useAppStore = create<AppState & AppActions>((set, get) => {
 
     persistAppData: () => {
       const { videos, lastVideoHash } = get()
-      AppStorage.save({ videos, lastVideoHash })
+      // Merge (union) with what is already persisted instead of blind-replacing.
+      // With two tabs/windows open, each store hydrates its own in-memory snapshot;
+      // a stale tab that persists later (thumbnail capture on canplay, mark-opened,
+      // etc.) would otherwise overwrite videos added by the other tab — the root
+      // cause of "new video disappears after refresh". Unioning means a stale tab
+      // can only add/update entries, never drop one it doesn't know about.
+      const persisted = AppStorage.load()
+      const merged = { ...(persisted.videos || {}), ...videos }
+      AppStorage.save({
+        videos: merged,
+        lastVideoHash: lastVideoHash ?? persisted.lastVideoHash ?? null,
+      })
     },
   }
 })
+
+// ── Cross-tab sync ──
+// When another tab/window writes the app data (adds/removes a video), refresh
+// this store's in-memory copy so it stays in sync. Without this, a stale tab
+// keeps its old snapshot and would rely on persistAppData's union-merge to avoid
+// clobbering — this listener additionally makes the dashboard update live.
+if (typeof window !== 'undefined') {
+  window.addEventListener('storage', (e) => {
+    if (e.key !== AppStorage.key) return
+    const data = AppStorage.load()
+    useAppStore.setState({ videos: data.videos || {}, lastVideoHash: data.lastVideoHash || null })
+  })
+}

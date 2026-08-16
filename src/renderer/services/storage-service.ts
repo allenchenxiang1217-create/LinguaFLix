@@ -45,6 +45,9 @@ function writeJSON(key: string, value: unknown): void {
 // ── App-level ──
 
 export const AppStorage = {
+  /** localStorage key backing the video registry (exposed for cross-tab sync). */
+  key: APP_KEY,
+
   load(): AppData {
     return readJSON<AppData>(APP_KEY) || { videos: {}, lastVideoHash: null }
   },
@@ -262,10 +265,59 @@ export function getNotebookCounts(videoHash: string): { notes: number; words: nu
   return { notes: notes.length, words: seen.size }
 }
 
-export function deleteNotebook(videoHash: string): void {
+export async function deleteNotebook(videoHash: string): Promise<void> {
   const notes = NotebookStorage.load(videoHash)
   const ids = notes.flatMap((n) => n.snapshots.map((s) => s.id))
   ScreenshotStorage.removeAll(ids)
+  // #7 同步删除：连同磁盘上的全尺寸 PNG 一并清理（缩略图只占 localStorage）。
+  for (const n of notes) {
+    for (const sn of n.snapshots) {
+      if (sn.filePath) await deleteScreenshotFromDisk(sn.filePath)
+    }
+  }
   NotebookStorage.remove(videoHash)
   VideoMetaStorage.remove(videoHash)
+}
+
+/** 从持久化笔记本里找回某张截图的磁盘 filePath（供单词本里删除单词时用，
+ *  此时播放器已退出、内存 noteStore 可能已清空）。 */
+export function findSnapshotFilePath(videoHash: string, snapshotId: string): string | undefined {
+  if (!videoHash || !snapshotId) return undefined
+  const notes = NotebookStorage.load(videoHash)
+  for (const n of notes) {
+    const snap = n.snapshots.find((s) => s.id === snapshotId)
+    if (snap?.filePath) return snap.filePath
+  }
+  return undefined
+}
+
+/** Delete a saved screenshot PNG from disk (Electron IPC / web backend). */
+async function deleteScreenshotFromDisk(filePath: string): Promise<void> {
+  const { electronAPI } = window as any
+  if (electronAPI?.deleteScreenshot) {
+    try {
+      await electronAPI.deleteScreenshot(filePath)
+    } catch {
+      /* best-effort */
+    }
+    return
+  }
+  // Web mode: same-origin /api proxy (mirrors readScreenshotFromDisk).
+  const fileName = filePath.replace(/[\\/]+$/, '').split(/[\\/]/).pop() || ''
+  if (!fileName) return
+  try {
+    await apiCall(`/api/screenshot/delete?file=${encodeURIComponent(fileName)}`, { method: 'DELETE' })
+  } catch {
+    /* best-effort */
+  }
+}
+
+/**
+ * Delete a snapshot's screenshot cache: localStorage thumbnail + full-res PNG on
+ * disk (when the snapshot has a filePath). Used by the #1/#10 deletion cascade to
+ * free space for orphaned screenshots.
+ */
+export async function deleteSnapshotCache(snapshotId: string, filePath?: string): Promise<void> {
+  ScreenshotStorage.remove(snapshotId)
+  if (filePath) await deleteScreenshotFromDisk(filePath)
 }

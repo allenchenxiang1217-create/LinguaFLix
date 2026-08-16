@@ -1,10 +1,10 @@
 import { useState } from 'react'
 import {
   Sparkles, Palette, Gauge, Database, Check, Eye, EyeOff, Sun, Moon, Loader2, Download,
-  Eraser, RotateCcw, Terminal, Keyboard,
+  Eraser, RotateCcw, Terminal, Keyboard, BookOpen,
 } from 'lucide-react'
 import {
-  useSettingsStore, type UILanguage, type SubtitleSize, type ThemeMode,
+  useSettingsStore, type UILanguage, type SubtitleSize, type ThemeMode, type DictMode,
   type ShortcutAction, SHORTCUT_ACTIONS, DEFAULT_SHORTCUTS, formatShortcutKey,
 } from '../../stores/settingsStore'
 import { AI_PROVIDERS, getProvider, normalizeBaseUrl } from '../../services/ai-providers'
@@ -233,7 +233,7 @@ function ProviderCard({ id, name, color, cheap, custom, selected, onSelect }: {
 
 export function SettingsPage() {
   const { t } = useI18n()
-  const { aiProvider, aiModel, aiOverrides, language, themeMode, theme, uiScale, subtitleSize, defaultPlaybackRate } = useSettingsStore()
+  const { aiProvider, aiModel, aiOverrides, language, themeMode, theme, uiScale, subtitleSize, defaultPlaybackRate, dictMode } = useSettingsStore()
   const setSetting = useSettingsStore((s) => s.setSetting)
   const setAiOverride = useSettingsStore((s) => s.setAiOverride)
   const setLanguage = useSettingsStore((s) => s.setLanguage)
@@ -315,6 +315,15 @@ export function SettingsPage() {
         <h2 className="text-xl font-semibold tracking-tight text-foreground">{t('settings.title')}</h2>
         <p className="mt-1 text-[0.8125rem] text-muted-foreground">{t('settings.subtitle')}</p>
       </div>
+
+      {/* ── 快捷键 (#5 置顶) ── */}
+      <Section icon={Keyboard} title={t('settings.section.shortcuts')} hint={t('settings.shortcuts.hint')}>
+        <div className="space-y-2.5">
+          {SHORTCUT_ACTIONS.map((a) => (
+            <ShortcutRow key={a} action={a} label={t(`settings.shortcuts.${a}`)} />
+          ))}
+        </div>
+      </Section>
 
       {/* ── AI 接口 ── */}
       <Section icon={Sparkles} title={t('settings.section.ai')}>
@@ -481,6 +490,18 @@ export function SettingsPage() {
         </div>
       </Section>
 
+      {/* ── 词典 (#3) ── */}
+      <Section icon={BookOpen} title={t('settings.section.dict')}>
+        <Field label={t('settings.dict.mode')} hint={t('settings.dict.modeHint')}>
+          <Seg<DictMode>
+            options={['online', 'offline']}
+            value={dictMode}
+            onChange={(v) => setSetting('dictMode', v)}
+            formatter={(v) => t(`settings.dict.${v}`)}
+          />
+        </Field>
+      </Section>
+
       {/* ── 播放 ── */}
       <Section icon={Gauge} title={t('settings.section.playback')}>
         <Field label={t('settings.playback.title')} hint={t('settings.playback.titleHint')}>
@@ -491,15 +512,6 @@ export function SettingsPage() {
             formatter={(v) => `${v}×`}
           />
         </Field>
-      </Section>
-
-      {/* ── 快捷键 (#2) ── */}
-      <Section icon={Keyboard} title={t('settings.section.shortcuts')} hint={t('settings.shortcuts.hint')}>
-        <div className="space-y-2.5">
-          {SHORTCUT_ACTIONS.map((a) => (
-            <ShortcutRow key={a} action={a} label={t(`settings.shortcuts.${a}`)} />
-          ))}
-        </div>
       </Section>
 
       {/* ── 数据 ── */}

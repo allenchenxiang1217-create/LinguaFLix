@@ -1,4 +1,4 @@
-import { contextBridge, ipcRenderer } from 'electron'
+import { contextBridge, ipcRenderer, webUtils } from 'electron'
 
 // ── Stream resolution result types (must be serializable) ──
 
@@ -33,12 +33,21 @@ const electronAPI = {
   openSubtitle: (): Promise<{ filePath: string; fileName: string; content: string } | null> =>
     ipcRenderer.invoke('dialog:openSubtitle'),
 
+  /** Absolute path of a dragged/selected File (Electron ≥32). Persists the raw
+   *  path so a drag-and-drop / <input type=file> import survives reload, exactly
+   *  like the open-video dialog path. Returns '' when the path isn't accessible. */
+  getPathForFile: (file: File): string => webUtils.getPathForFile(file),
+
   // Screenshot save/read
   saveScreenshot: (dataUrl: string, timestamp: number): Promise<{ filePath: string; fileName: string }> =>
     ipcRenderer.invoke('screenshot:save', dataUrl, timestamp),
 
   readScreenshot: (filePath: string): Promise<string> =>
     ipcRenderer.invoke('screenshot:read', filePath),
+
+  /** Delete a saved screenshot PNG (deletion cascade: free disk space). */
+  deleteScreenshot: (filePath: string): Promise<boolean> =>
+    ipcRenderer.invoke('screenshot:delete', filePath),
 
   // ── Stream Resolution ──
   /** Resolve a platform URL (YouTube, Bilibili, etc.) to a direct stream URL. */

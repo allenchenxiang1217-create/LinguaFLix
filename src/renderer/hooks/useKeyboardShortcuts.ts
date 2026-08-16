@@ -10,7 +10,7 @@ import { useScreenshot } from './useScreenshot'
  * `shortcuts` is an effect dep, and every keypress reads the live map via
  * getState() — no stale `[]` closure, no manual re-subscribe needed.
  */
-export function useKeyboardShortcuts() {
+export function useKeyboardShortcuts(disabled = false) {
   const { takeSnapshot } = useScreenshot()
   // Ref to avoid stale closure
   const takeSnapshotRef = useRef(takeSnapshot)
@@ -20,6 +20,8 @@ export function useKeyboardShortcuts() {
 
   useEffect(() => {
     function handleKeyDown(e: KeyboardEvent) {
+      // #2 设置面板打开时暂停快捷键，避免在设置里误触播放/截图/全屏。
+      if (disabled) return
       // Ignore if user is typing in an input
       const target = e.target as HTMLElement
       if (target.tagName === 'INPUT' || target.tagName === 'TEXTAREA' || target.isContentEditable) {
@@ -83,5 +85,5 @@ export function useKeyboardShortcuts() {
 
     window.addEventListener('keydown', handleKeyDown)
     return () => window.removeEventListener('keydown', handleKeyDown)
-  }, [shortcuts])
+  }, [shortcuts, disabled])
 }

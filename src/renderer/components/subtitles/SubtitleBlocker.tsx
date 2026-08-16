@@ -1,6 +1,8 @@
-import { useRef, useState, useCallback } from 'react'
+import { useRef, useState, useCallback, useEffect } from 'react'
 import { useSubtitleStore } from '../../stores/subtitleStore'
+import { usePlayerStore } from '../../stores/playerStore'
 import { useI18n } from '../../i18n/useI18n'
+import { transformConfig, type ObjectFit, type VideoGeometry } from '../../lib/blockerGeometry'
 
 type DragMode = 'move' | 'resize-nw' | 'resize-ne' | 'resize-sw' | 'resize-se' | 'resize-n' | 'resize-s' | 'resize-w' | 'resize-e' | null
 
@@ -13,6 +15,7 @@ export function SubtitleBlocker() {
   const effect = useSubtitleStore((s) => s.blockerEffect)
   const config = useSubtitleStore((s) => s.blockerConfig)
   const updateConfig = useSubtitleStore((s) => s.updateBlockerConfig)
+  const videoSrc = usePlayerStore((s) => s.videoSrc)
 
   const [dragMode, setDragMode] = useState<DragMode>(null)
   const dragStart = useRef({ x: 0, y: 0, config })
@@ -74,6 +77,56 @@ export function SubtitleBlocker() {
   }, [dragMode, locked, getContainerRect, updateConfig])
 
   const handlePointerUp = useCallback(() => setDragMode(null), [])
+
+  // ── 全屏/缩放同步：挡块百分比换算到「视频画面」坐标 ──
+  // 记录「当前百分比是在哪个几何下对齐的」；几何（容器尺寸 / object-fit / 视频分辨率）
+  // 变化时，把挡块从旧几何换算到新几何，保持它罩住视频里的同一块画面（如烧录字幕）。
+  const geomRef = useRef<VideoGeometry | null>(null)
+
+  const readGeometry = useCallback((): VideoGeometry | null => {
+    const el = blockerRef.current?.parentElement
+    if (!el) return null
+    const r = el.getBoundingClientRect()
+    const vid = usePlayerStore.getState().videoRef
+    const fit: ObjectFit = usePlayerStore.getState().isFullscreen ? 'cover' : 'contain'
+    return {
+      containerW: r.width,
+      containerH: r.height,
+      videoW: vid?.videoWidth ?? 0,
+      videoH: vid?.videoHeight ?? 0,
+      fit,
+    }
+  }, [])
+
+  // 视频元数据就绪（videoWidth/Height 可用）后，把基准几何刷新到当前值。
+  // 每次切换视频也重置一次，避免沿用上一个视频的分辨率。
+  useEffect(() => {
+    geomRef.current = readGeometry()
+    const vid = usePlayerStore.getState().videoRef
+    if (!vid) return
+    const onMeta = () => { geomRef.current = readGeometry() }
+    if (vid.videoWidth > 0 && vid.videoHeight > 0) onMeta()
+    else vid.addEventListener('loadedmetadata', onMeta)
+    return () => vid.removeEventListener('loadedmetadata', onMeta)
+  }, [videoSrc, readGeometry])
+
+  // 容器尺寸变化（进入/退出全屏、窗口缩放）时换算；视频分辨率未知则跳过。
+  useEffect(() => {
+    const el = blockerRef.current?.parentElement
+    if (!el) return
+    const ro = new ResizeObserver(() => {
+      const prev = geomRef.current
+      const next = readGeometry()
+      geomRef.current = next
+      if (!prev || !next) return
+      if (prev.containerW === next.containerW && prev.containerH === next.containerH && prev.fit === next.fit) return
+      if (prev.videoW <= 0 || prev.videoH <= 0 || next.videoW <= 0 || next.videoH <= 0) return
+      const cfg = useSubtitleStore.getState().blockerConfig
+      useSubtitleStore.getState().updateBlockerConfig(transformConfig(cfg, prev, next))
+    })
+    ro.observe(el)
+    return () => ro.disconnect()
+  }, [readGeometry])
 
   if (!visible) return null
 

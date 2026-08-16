@@ -34,34 +34,17 @@ export interface YtDlpStatus {
 }
 
 // ── Backend API base URL ──
-let _apiBaseUrl: string | null = null
-let _apiBaseUrlPromise: Promise<string> | null = null
-
-async function getApiBaseUrl(): Promise<string> {
-  if (_apiBaseUrl) return _apiBaseUrl
-  if (!_apiBaseUrlPromise) {
-    _apiBaseUrlPromise = (async () => {
-      // Try default ports, starting with env or the expected port
-      const ports = [5176, 5177, 5178, 5179, 5180]
-      for (const port of ports) {
-        try {
-          const res = await fetch(`http://127.0.0.1:${port}/api/health`, { signal: AbortSignal.timeout(500) })
-          if (res.ok) {
-            _apiBaseUrl = `http://127.0.0.1:${port}`
-            return _apiBaseUrl
-          }
-        } catch {}
-      }
-      _apiBaseUrl = 'http://127.0.0.1:5176' // default fallback
-      return _apiBaseUrl
-    })()
-  }
-  return _apiBaseUrlPromise
-}
-
+/**
+ * Call the HTTP backend through the SAME-ORIGIN /api path.
+ *
+ * Web mode has no Electron main process; instead the dev Vite server, the static
+ * harness proxy, or a production reverse proxy all forward /api/* to the backend.
+ * Same-origin needs no CORS and no hardcoded host/port, so every HTTP API call
+ * (dictionary, stream resolution, screenshots, downloads) keeps working behind any
+ * proxy or deployment — no 127.0.0.1 port probing.
+ */
 export async function apiCall<T = any>(path: string, options?: RequestInit): Promise<T> {
-  const base = await getApiBaseUrl()
-  const res = await fetch(`${base}${path}`, {
+  const res = await fetch(path, {
     ...options,
     headers: { 'Content-Type': 'application/json', ...options?.headers },
   })
@@ -313,6 +296,13 @@ export type ReplayStatus =
 export async function resolveReplayableMedia(meta: { filePath: string }): Promise<ReplayStatus> {
   let fp = meta.filePath
 
+  // #9 修复旧记录：早期 Electron 导入在 media base 未就绪时把 file:// 兜底 URL 存进了
+  // 注册表。剥掉 file:// 前缀还原成原始绝对路径，toMediaUrl 才能对着当前 media server
+  // 重新编码出可播 URL，否则刷新后视频会消失。
+  if (fp.startsWith('file://')) {
+    fp = fp.replace(/^file:\/\//, '')
+  }
+
   // Legacy cross-origin media URL from a previous desktop launch: the stored
   // port is dead (the media server picks a new random port every launch), so
   // re-open would 404. Await the current base URL and rewrite before resolving.
@@ -522,8 +512,8 @@ export async function downloadVideo(url: string): Promise<DownloadResult> {
  * been unreachable for a sustained period (~2 min).
  */
 async function waitForDownloadTask(taskId: string): Promise<DownloadResult> {
-  const base = _apiBaseUrl || 'http://127.0.0.1:5176'
-  const progressUrl = `${base}/api/stream/download/progress?taskId=${encodeURIComponent(taskId)}&once=1`
+  // Same-origin /api path (proxy-forwarded), consistent with apiCall.
+  const progressUrl = `/api/stream/download/progress?taskId=${encodeURIComponent(taskId)}&once=1`
 
   return new Promise((resolve, reject) => {
     let timer: ReturnType<typeof setTimeout> | null = null

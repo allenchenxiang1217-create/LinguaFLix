@@ -3,6 +3,7 @@ import { usePlayerStore } from '../../stores/playerStore'
 import { useAppStore } from '../../stores/appStore'
 import { useNoteStore } from '../../stores/noteStore'
 import { useSettingsStore } from '../../stores/settingsStore'
+import { useSubtitleStore } from '../../stores/subtitleStore'
 import { useSubtitle } from '../../hooks/useSubtitle'
 import { useScreenshot } from '../../hooks/useScreenshot'
 import { OCRService } from '../../services/ocr-service'
@@ -11,7 +12,8 @@ import { VideoControls } from './VideoControls'
 import { PlayerToolRail } from './PlayerToolRail'
 import { SubtitleOverlay } from '../subtitles/SubtitleOverlay'
 import { SubtitleBlocker } from '../subtitles/SubtitleBlocker'
-import { Film } from 'lucide-react'
+import { NotesPanel } from '../sidebar/NotesPanel'
+import { Film, Notebook, BookOpen } from 'lucide-react'
 import { useI18n } from '../../i18n/useI18n'
 
 const ocrInitialized = { current: false }
@@ -44,15 +46,18 @@ export function VideoPlayer() {
 
   const [videoReady, setVideoReady] = useState(false)
   const [videoError, setVideoError] = useState<string | null>(null)
+  // #6 全屏态悬浮的笔记/生词面板（按钮在右上角，面板浮在视频上，退出全屏时关闭）
+  const [fsPanel, setFsPanel] = useState<'notes' | 'vocab' | null>(null)
 
   const { t } = useI18n()
   const videoSrc = usePlayerStore((s) => s.videoSrc)
+  const isFullscreen = usePlayerStore((s) => s.isFullscreen)
   const setVideoRef = usePlayerStore((s) => s.setVideoRef)
   const setContainerRef = usePlayerStore((s) => s.setContainerRef)
   const { syncCueIndex } = useSubtitle()
   const { takeSnapshot } = useScreenshot()
-  const setSidebarMode = useNoteStore((s) => s.setSidebarMode)
   const setOCRResult = useNoteStore((s) => s.setOCRResult)
+  const setSidebarTab = useNoteStore((s) => s.setSidebarTab)
   const ocrLanguage = useSettingsStore((s) => s.ocrLanguage)
   const defaultPlaybackRate = useSettingsStore((s) => s.defaultPlaybackRate)
 
@@ -81,13 +86,32 @@ export function VideoPlayer() {
   useEffect(() => {
     setContainerRef(containerRef.current)
     return () => setContainerRef(null)
-  }, [setContainerRef])
+  }, [videoSrc, setContainerRef])
 
   useEffect(() => {
     const onFsChange = () => usePlayerStore.getState().setFullscreen(Boolean(document.fullscreenElement))
     document.addEventListener('fullscreenchange', onFsChange)
     return () => document.removeEventListener('fullscreenchange', onFsChange)
   }, [])
+
+  // 退出全屏时收起悬浮的笔记/生词面板
+  useEffect(() => {
+    if (!isFullscreen) setFsPanel(null)
+  }, [isFullscreen])
+
+  // #2 全屏点开笔记/生词面板时隐藏字幕挡块（与非全屏跳转笔记的体验一致），
+  // 让字幕不被遮挡；关闭面板后按原可见状态还原。
+  const blockerWasVisibleRef = useRef(false)
+  useEffect(() => {
+    const st = useSubtitleStore.getState()
+    if (fsPanel) {
+      blockerWasVisibleRef.current = st.blockerVisible
+      if (st.blockerVisible) st.setBlockerVisible(false)
+    } else if (blockerWasVisibleRef.current) {
+      st.setBlockerVisible(true)
+      blockerWasVisibleRef.current = false
+    }
+  }, [fsPanel])
 
   // Reset ready/error state when video source changes
   useEffect(() => {
@@ -205,6 +229,7 @@ export function VideoPlayer() {
   }, [videoSrc, t])
 
   const handleSnapshot = useCallback(async () => {
+    // 无感截屏：与快捷键（takeSnapshotRef）一致，只做闪光反馈，不弹出侧边栏
     const snapshotId = await takeSnapshot()
     if (snapshotId && containerRef.current) {
       // Flash feedback
@@ -213,16 +238,8 @@ export function VideoPlayer() {
       shadowTimerRef.current = window.setTimeout(() => {
         if (containerRef.current) containerRef.current.style.boxShadow = ''
       }, 200)
-
-      // Briefly show sidebar
-      setSidebarMode('narrow')
-      useNoteStore.getState().setSidebarHovered(true)
-      clearTimeout(hoverTimerRef.current)
-      hoverTimerRef.current = window.setTimeout(() => {
-        useNoteStore.getState().setSidebarHovered(false)
-      }, 2000)
     }
-  }, [takeSnapshot, setSidebarMode])
+  }, [takeSnapshot])
 
   if (!videoSrc) return null
 
@@ -269,7 +286,11 @@ export function VideoPlayer() {
       <video
         ref={videoRef}
         src={videoSrc}
-        className="max-w-full max-h-full object-contain relative z-10"
+        className={
+          isFullscreen
+            ? 'w-full h-full object-cover relative z-10'
+            : 'max-w-full max-h-full object-contain relative z-10'
+        }
         onTimeUpdate={handleTimeUpdate}
         onLoadedMetadata={handleLoadedMetadata}
         onCanPlay={handleCanPlay}
@@ -281,6 +302,54 @@ export function VideoPlayer() {
           isPlaying ? pause() : play()
         }}
       />
+
+      {/* #6 全屏态：笔记/生词按钮常驻右上角，点开悬浮面板（渲染在 fullscreen 元素内才能可见） */}
+      {isFullscreen && (
+        <>
+          <div className="absolute top-3 right-3 z-50 flex gap-1.5">
+            <button
+              onClick={() => {
+                setSidebarTab('notes')
+                setFsPanel(fsPanel === 'notes' ? null : 'notes')
+              }}
+              className={`flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg text-xs font-medium backdrop-blur-sm
+                          border transition-colors cursor-pointer ${
+                            fsPanel === 'notes'
+                              ? 'bg-primary/25 border-primary/40 text-primary'
+                              : 'bg-black/40 border-white/10 text-white/70 hover:text-white hover:bg-black/60'
+                          }`}
+              title={t('layout.notes')}
+            >
+              <Notebook size={14} />
+              {t('layout.notes')}
+            </button>
+            <button
+              onClick={() => {
+                setSidebarTab('vocab')
+                setFsPanel(fsPanel === 'vocab' ? null : 'vocab')
+              }}
+              className={`flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg text-xs font-medium backdrop-blur-sm
+                          border transition-colors cursor-pointer ${
+                            fsPanel === 'vocab'
+                              ? 'bg-primary/25 border-primary/40 text-primary'
+                              : 'bg-black/40 border-white/10 text-white/70 hover:text-white hover:bg-black/60'
+                          }`}
+              title={t('layout.vocab')}
+            >
+              <BookOpen size={14} />
+              {t('layout.vocab')}
+            </button>
+          </div>
+
+          {fsPanel && (
+            <div className="force-dark absolute top-14 right-3 z-50 w-80 h-[60%] max-h-[560px] rounded-xl
+                            border border-white/10 bg-zinc-900/95 backdrop-blur-md shadow-2xl shadow-black/60
+                            flex flex-col overflow-hidden animate-fade-in">
+              <NotesPanel />
+            </div>
+          )}
+        </>
+      )}
 
       <SubtitleOverlay />
       <SubtitleBlocker />

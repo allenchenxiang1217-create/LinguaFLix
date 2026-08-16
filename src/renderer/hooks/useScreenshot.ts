@@ -24,6 +24,11 @@ export function useScreenshot() {
         ? subtitles[currentCueIndex].text
         : ''
 
+    // #7 截图自动隐藏挡块：截帧期间临时隐藏字幕挡块，截完立即恢复（用户无感）。
+    const subtitleStore = useSubtitleStore.getState()
+    const wasBlockerVisible = subtitleStore.blockerVisible
+    if (wasBlockerVisible) subtitleStore.setBlockerVisible(false)
+
     try {
       // Capture screenshot (raw video frame + timestamp watermark + subtitle text)
       const result = await captureScreenshot(videoEl, currentTime, subtitleText)
@@ -60,6 +65,8 @@ export function useScreenshot() {
     } catch (err) {
       console.error('Failed to take screenshot:', err)
       return null
+    } finally {
+      if (wasBlockerVisible) useSubtitleStore.getState().setBlockerVisible(true)
     }
   }, [addSnapshot, enqueueOCR, t])
 

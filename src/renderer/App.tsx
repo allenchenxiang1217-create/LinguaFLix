@@ -2,7 +2,7 @@ import { useEffect, useState } from 'react'
 import { useAppStore } from './stores/appStore'
 import { Dashboard } from './components/dashboard/Dashboard'
 import { AppLayout } from './components/layout/AppLayout'
-import { LogoMark, Wordmark } from './components/Logo'
+import { AppLogo, Wordmark } from './components/Logo'
 import { useI18n } from './i18n/useI18n'
 import { useSettingsStore } from './stores/settingsStore'
 
@@ -39,11 +39,11 @@ export default function App() {
     return (
       <div className="h-screen w-screen bg-background flex items-center justify-center">
         <div className="flex flex-col items-center gap-5 animate-fade-in">
-          <div
-            className="w-16 h-16 rounded-[18px] grid place-items-center text-foreground shadow-lg shadow-black/30
-                       bg-[radial-gradient(120%_120%_at_30%_0%,var(--card),transparent_60%),linear-gradient(160deg,var(--card),var(--popover))]"
-          >
-            <LogoMark size={38} />
+          {/* 引导页展示完整应用图标（白底 + 紫渐变播放键）。
+              圆角：阴影/描边要跟图标本身的 rx=221 一致走圆角，不能直接挂在 svg 上——
+              CSS box-shadow 不会跟随 svg 内部的圆角，会投出一个「直角」矩形阴影。 */}
+          <div className="rounded-[22%] shadow-lg shadow-black/30 border border-black/10">
+            <AppLogo variant="color" size={64} />
           </div>
           <h1 className="text-2xl font-semibold tracking-tight text-foreground">
             <Wordmark />

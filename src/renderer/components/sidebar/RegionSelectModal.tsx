@@ -3,6 +3,7 @@ import { createPortal } from 'react-dom'
 import type { OCRRegion } from '@shared/types'
 import { X, Scan, Loader2 } from 'lucide-react'
 import { useI18n } from '../../i18n/useI18n'
+import { portalTarget } from '../../lib/portal'
 
 interface RegionSelectModalProps {
   imageDataUrl: string
@@ -218,6 +219,6 @@ export function RegionSelectModal({
         </button>
       </div>
     </div>,
-    document.body,
+    portalTarget(),
   )
 }
