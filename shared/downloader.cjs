@@ -42,7 +42,14 @@ const FORMAT_SELECTOR =
 // downloads cleanly in seconds. --socket-timeout keeps slow connections from
 // dying during stalls. --retries 5 handles transient network blips within a
 // single attempt.
-const STABILITY_ARGS = ['--force-ipv4', '--socket-timeout', '60', '--retries', '5']
+const STABILITY_ARGS = [
+  '--force-ipv4',
+  '--socket-timeout', '60',
+  '--retries', '5',
+  '--fragment-retries', '10',
+  '--extractor-retries', '3',
+  '--retry-sleep', '2',
+]
 
 /**
  * Build the full yt-dlp argument list for a download. Split out so callers can
@@ -160,14 +167,21 @@ async function downloadVideoWithYtdlp({ ytdlpPath, downloadDir, url, onProgress 
   const outputTemplate = path.join(downloadDir, '%(title)s.%(ext)s')
   const args = buildDownloadArgs({ outputTemplate, url })
 
-  // Transient network/TLS failures are common enough that one automatic retry
-  // meaningfully improves success rate without hanging the client for long.
-  try {
-    return await runDownloadOnce({ ytdlpPath, args, onProgress, downloadDir })
-  } catch (err) {
-    console.warn(`Download attempt 1 failed (${err.message}) — retrying once…`)
-    return await runDownloadOnce({ ytdlpPath, args, onProgress, downloadDir })
+  // Transient resets are common on platform/CDN connections. Retry with a
+  // short backoff while keeping yt-dlp's own certificate validation intact.
+  let lastError
+  for (let attempt = 1; attempt <= 3; attempt++) {
+    try {
+      return await runDownloadOnce({ ytdlpPath, args, onProgress, downloadDir })
+    } catch (err) {
+      lastError = err
+      if (attempt === 3) break
+      const delayMs = attempt * 1500
+      console.warn(`Download attempt ${attempt} failed (${err.message}) — retrying in ${delayMs}ms…`)
+      await new Promise((resolve) => setTimeout(resolve, delayMs))
+    }
   }
+  throw lastError
 }
 
 module.exports = {

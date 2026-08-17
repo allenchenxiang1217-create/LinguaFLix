@@ -227,7 +227,7 @@ async function isYtDlpAvailable() {
   }
 }
 
-function downloadBinary(onProgress) {
+function downloadBinaryOnce(onProgress) {
   const destPath = path.join(BIN_DIR, BINARY_NAME);
   return new Promise((resolve, reject) => {
     const request = https.get(GITHUB_DL_URL, { timeout: 120000 });
@@ -250,6 +250,22 @@ function downloadBinary(onProgress) {
     request.on('error', reject);
     request.setTimeout(120000, () => { request.destroy(); reject(new Error('Download timed out')); });
   });
+}
+
+async function downloadBinary(onProgress) {
+  let lastError;
+  for (let attempt = 1; attempt <= 3; attempt++) {
+    try {
+      return await downloadBinaryOnce(onProgress);
+    } catch (err) {
+      lastError = err;
+      if (attempt === 3) break;
+      const delayMs = attempt * 1500;
+      console.warn(`yt-dlp install attempt ${attempt} failed (${err.message}) — retrying in ${delayMs}ms…`);
+      await new Promise(resolve => setTimeout(resolve, delayMs));
+    }
+  }
+  throw lastError;
 }
 
 function pipeDownload(response, destPath, onProgress, resolve, reject) {
