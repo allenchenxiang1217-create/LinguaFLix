@@ -198,7 +198,7 @@ async function getYtDlpPath() {
 
   const inPath = await findInPath();
   if (inPath) {
-    cachedYtDlpPath = 'yt-dlp';
+    cachedYtDlpPath = inPath;
     availabilityChecked = true;
     availabilityResult = true;
     return cachedYtDlpPath;
@@ -206,10 +206,29 @@ async function getYtDlpPath() {
 
   const downloadPath = path.join(BIN_DIR, BINARY_NAME);
   if (fs.existsSync(downloadPath)) {
-    cachedYtDlpPath = downloadPath;
-    availabilityChecked = true;
-    availabilityResult = true;
-    return cachedYtDlpPath;
+    if (process.platform === 'win32') {
+      try {
+        const header = Buffer.alloc(2);
+        const fd = fs.openSync(downloadPath, 'r');
+        fs.readSync(fd, header, 0, 2, 0);
+        fs.closeSync(fd);
+        if (header[0] !== 0x4d || header[1] !== 0x5a) {
+          fs.unlinkSync(downloadPath);
+        } else {
+          cachedYtDlpPath = downloadPath;
+          availabilityChecked = true;
+          availabilityResult = true;
+          return cachedYtDlpPath;
+        }
+      } catch {
+        try { fs.unlinkSync(downloadPath); } catch {}
+      }
+    } else {
+      cachedYtDlpPath = downloadPath;
+      availabilityChecked = true;
+      availabilityResult = true;
+      return cachedYtDlpPath;
+    }
   }
 
   throw new Error('yt-dlp not found. Use /api/stream/download-ytdlp to install it.');
@@ -280,6 +299,23 @@ function pipeDownload(response, destPath, onProgress, resolve, reject) {
     }
   });
   pipelineAsync(response, fileStream).then(() => {
+    if (process.platform === 'win32') {
+      const header = Buffer.alloc(2);
+      try {
+        const fd = fs.openSync(destPath, 'r');
+        fs.readSync(fd, header, 0, 2, 0);
+        fs.closeSync(fd);
+      } catch (err) {
+        try { fs.unlinkSync(destPath); } catch {}
+        reject(new Error(`Downloaded yt-dlp.exe could not be validated: ${err.message}`));
+        return;
+      }
+      if (header[0] !== 0x4d || header[1] !== 0x5a) {
+        try { fs.unlinkSync(destPath); } catch {}
+        reject(new Error('Downloaded yt-dlp file is not a valid Windows executable. Check the network or proxy response.'));
+        return;
+      }
+    }
     if (process.platform !== 'win32') {
       try { fs.chmodSync(destPath, 0o755); } catch {}
     }

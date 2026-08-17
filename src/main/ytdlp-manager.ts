@@ -12,7 +12,7 @@
 import { app } from 'electron'
 import { execFile } from 'child_process'
 import { join } from 'path'
-import { existsSync, mkdirSync, chmodSync, createWriteStream } from 'fs'
+import { existsSync, mkdirSync, chmodSync, createWriteStream, openSync, readSync, closeSync, unlinkSync } from 'fs'
 import { get } from 'https'
 import { pipeline } from 'stream'
 import { promisify } from 'util'
@@ -134,6 +134,23 @@ function pipeDownload(
 
   pipelineAsync(response, fileStream)
     .then(() => {
+      if (process.platform === 'win32') {
+        const header = Buffer.alloc(2)
+        try {
+          const fd = openSync(destPath, 'r')
+          readSync(fd, header, 0, 2, 0)
+          closeSync(fd)
+        } catch (err) {
+          try { unlinkSync(destPath) } catch { /* ignore cleanup failure */ }
+          reject(new Error(`Downloaded yt-dlp.exe could not be validated: ${(err as Error).message}`))
+          return
+        }
+        if (header[0] !== 0x4d || header[1] !== 0x5a) {
+          try { unlinkSync(destPath) } catch { /* ignore cleanup failure */ }
+          reject(new Error('Downloaded yt-dlp file is not a valid Windows executable. Check the network or proxy response.'))
+          return
+        }
+      }
       // Make executable on macOS/Linux
       if (process.platform !== 'win32') {
         try {
@@ -157,7 +174,7 @@ export const YtDlpManager = {
     // 1. Check system PATH
     const inPath = await findInPath()
     if (inPath) {
-      cachedPath = 'yt-dlp' // Use PATH version directly (always up to date)
+      cachedPath = inPath // Keep the absolute path returned by where.exe on Windows.
       availabilityChecked = true
       availabilityResult = true
       return cachedPath
