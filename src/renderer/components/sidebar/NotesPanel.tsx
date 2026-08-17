@@ -18,6 +18,11 @@ export function NotesPanel() {
   const setActiveNote = useNoteStore((s) => s.setActiveNote)
   const createNote = useNoteStore((s) => s.createNote)
   const videoHash = usePlayerStore((s) => s.videoHash)
+  const videos = useAppStore((s) => s.videos)
+  const noteVideoHash = videoHash && videos[videoHash]?.isReviewClip && videos[videoHash]?.reviewSourceHash
+    ? videos[videoHash]?.reviewSourceHash
+    : videoHash
+  const readOnly = !!(videoHash && videos[videoHash]?.isReviewClip)
   const screenshotKey = useSettingsStore((s) => s.shortcuts.takeScreenshot)
   const [noteSelectorOpen, setNoteSelectorOpen] = useState(false)
   const [deleteConfirmId, setDeleteConfirmId] = useState<string | null>(null)
@@ -26,8 +31,8 @@ export function NotesPanel() {
   const activeNote = notes.find((n) => n.id === activeNoteId)
 
   const handleCreateNote = () => {
-    if (!videoHash) return
-    createNote(videoHash)
+    if (!noteVideoHash) return
+    createNote(noteVideoHash)
     setNoteSelectorOpen(false)
   }
 
@@ -47,7 +52,7 @@ export function NotesPanel() {
         const isLast = notes.length === 1
         deleteNoteCompletely(note)
         // 删掉最后一本笔记后自动新建一本，保证当前视频的截图/笔记入口始终可用。
-        if (isLast && videoHash) createNote(videoHash)
+        if (isLast && noteVideoHash) createNote(noteVideoHash)
       }
     } else {
       setDeleteConfirmId(noteId)
@@ -119,31 +124,30 @@ export function NotesPanel() {
                           {t('notes.snaps', { n: note.snapshots.length })}
                         </span>
                       </button>
-                      {/* Delete button — always available (#10: 单本笔记也可删除) */}
-                      <button
-                        onClick={(e) => handleDeleteNote(note.id, e)}
-                        className={`p-1 rounded-md transition-all duration-200 cursor-pointer
-                          ${deleteConfirmId === note.id
-                            ? 'bg-destructive/15 text-destructive'
-                            : 'text-muted-foreground/0 group-hover/note:text-muted-foreground/40 hover:bg-destructive/10 hover:text-destructive'
-                          }`}
-                        title={deleteConfirmId === note.id ? t('notes.confirmDelete') : t('notes.deleteNote')}
-                      >
-                        {deleteConfirmId === note.id ? (
-                          <AlertCircle size={11} />
-                        ) : (
-                          <Trash2 size={11} />
-                        )}
-                      </button>
+                      {!readOnly && (
+                        <button
+                          onClick={(e) => handleDeleteNote(note.id, e)}
+                          className={`p-1 rounded-md transition-all duration-200 cursor-pointer
+                            ${deleteConfirmId === note.id
+                              ? 'bg-destructive/15 text-destructive'
+                              : 'text-muted-foreground/0 group-hover/note:text-muted-foreground/40 hover:bg-destructive/10 hover:text-destructive'
+                            }`}
+                          title={deleteConfirmId === note.id ? t('notes.confirmDelete') : t('notes.deleteNote')}
+                        >
+                          {deleteConfirmId === note.id ? <AlertCircle size={11} /> : <Trash2 size={11} />}
+                        </button>
+                      )}
                     </div>
                   ))}
-                  <button
-                    onClick={handleCreateNote}
-                    className="w-full flex items-center gap-1.5 px-2.5 py-1.5 text-xs rounded-lg
-                               text-muted-foreground hover:bg-secondary/30 transition-colors cursor-pointer"
-                  >
-                    <Plus size={11} /> {t('notes.newNote')}
-                  </button>
+                  {!readOnly && (
+                    <button
+                      onClick={handleCreateNote}
+                      className="w-full flex items-center gap-1.5 px-2.5 py-1.5 text-xs rounded-lg
+                                 text-muted-foreground hover:bg-secondary/30 transition-colors cursor-pointer"
+                    >
+                      <Plus size={11} /> {t('notes.newNote')}
+                    </button>
+                  )}
                 </div>
               )}
             </div>
@@ -164,7 +168,7 @@ export function NotesPanel() {
             ) : (
               <div className="p-2 space-y-2">
                 {activeNote.snapshots.map((snap) => (
-                  <NoteSnapshotCard key={snap.id} snapshot={snap} noteId={activeNote.id} />
+                  <NoteSnapshotCard key={snap.id} snapshot={snap} noteId={activeNote.id} readOnly={readOnly} />
                 ))}
               </div>
             )}

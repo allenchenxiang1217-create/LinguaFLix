@@ -9,6 +9,7 @@ interface AppState {
 
   // UI
   appPhase: 'loading' | 'dashboard' | 'player'
+  dashboardReturnView: 'library' | 'recent' | 'review' | 'clip'
   streak: number    // consecutive days of learning
 
   // Stats
@@ -27,6 +28,7 @@ interface AppActions {
 
   // Navigation
   setAppPhase: (phase: 'loading' | 'dashboard' | 'player') => void
+  setDashboardReturnView: (view: AppState['dashboardReturnView']) => void
 
   // Stats
   refreshStats: () => void
@@ -54,6 +56,7 @@ export const useAppStore = create<AppState & AppActions>((set, get) => {
     videos: saved.videos || {},
     lastVideoHash: saved.lastVideoHash || null,
     appPhase: 'loading',
+    dashboardReturnView: 'library',
     streak: 0,
     totalWords: 0,
     todayReviewCount: 0,
@@ -114,6 +117,8 @@ export const useAppStore = create<AppState & AppActions>((set, get) => {
     },
 
     setAppPhase: (phase) => set({ appPhase: phase }),
+
+    setDashboardReturnView: (view) => set({ dashboardReturnView: view }),
 
     refreshStats: () => {
       const words = getVocabularyWords()

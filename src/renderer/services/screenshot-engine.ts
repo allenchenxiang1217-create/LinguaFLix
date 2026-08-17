@@ -27,15 +27,16 @@ export function captureFrame(videoEl: HTMLVideoElement): string | null {
 }
 
 /**
- * Capture a small, low-res cover thumbnail from the video's current frame.
- * Used to generate the dashboard video cover (a real frame instead of a color block).
+ * Capture a dashboard cover from the video's current frame.
+ * Keep enough source pixels for the larger library cards while bounding the
+ * data URL size for local metadata storage.
  */
 export function captureVideoThumbnail(videoEl: HTMLVideoElement): string | null {
   const vw = videoEl.videoWidth
   const vh = videoEl.videoHeight
   if (vw === 0 || vh === 0) return null
 
-  const thumbWidth = 320
+  const thumbWidth = 640
   const thumbHeight = Math.max(1, Math.round((vh / vw) * thumbWidth))
   const canvas = document.createElement('canvas')
   canvas.width = thumbWidth
@@ -44,7 +45,7 @@ export function captureVideoThumbnail(videoEl: HTMLVideoElement): string | null 
   if (!ctx) return null
 
   ctx.drawImage(videoEl, 0, 0, thumbWidth, thumbHeight)
-  return canvas.toDataURL('image/jpeg', 0.6)
+  return canvas.toDataURL('image/jpeg', 0.78)
 }
 
 /**

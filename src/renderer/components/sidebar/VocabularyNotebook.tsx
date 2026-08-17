@@ -12,6 +12,7 @@ import {
 import type { VocabWord } from '@shared/types'
 import { useI18n } from '../../i18n/useI18n'
 import { ConfirmDialog } from '../ui/ConfirmDialog'
+import { mapSourceTimeToClip } from '../../lib/review-clip'
 
 type SortMode = 'alpha' | 'video'
 type ReviewFilter = 'all' | 'due'
@@ -35,11 +36,15 @@ export function VocabularyNotebook({ currentVideoHash }: VocabularyNotebookProps
   const { t } = useI18n()
 
   // #6 生词独立：侧栏只显示当前视频的生词；不传（或传空）则显示全部。
+  const currentVideo = currentVideoHash ? videos[currentVideoHash] : null
+  const sourceHash = currentVideo?.isReviewClip && currentVideo.reviewSourceHash
+    ? currentVideo.reviewSourceHash
+    : currentVideoHash
   const words = useMemo(
-    () => (currentVideoHash ? allWords.filter((w) => w.videoHash === currentVideoHash) : allWords),
-    [allWords, currentVideoHash],
+    () => (sourceHash ? allWords.filter((w) => w.videoHash === sourceHash) : allWords),
+    [allWords, sourceHash],
   )
-  const scopedVideoName = currentVideoHash ? videos[currentVideoHash]?.fileName : null
+  const scopedVideoName = sourceHash ? videos[sourceHash]?.fileName : null
 
   // ── #1 删除生词：确认悬浮窗；级联清理快照副本 + 孤儿截图缓存 ──
   const confirmRemoveWord = () => {
@@ -55,7 +60,8 @@ export function VocabularyNotebook({ currentVideoHash }: VocabularyNotebookProps
     const subtitleStore = useSubtitleStore.getState()
     const wasBlockerVisible = subtitleStore.blockerVisible
     if (wasBlockerVisible) subtitleStore.setBlockerVisible(false)
-    const startTime = Math.max(0, word.videoTimestamp - 3)
+    const clipTime = mapSourceTimeToClip(currentVideo, word.videoTimestamp) ?? word.videoTimestamp
+    const startTime = Math.max(0, clipTime - 3)
     seek(startTime)
     usePlayerStore.getState().play()
     clearTimeout(pauseTimerRef.current)
@@ -294,7 +300,7 @@ export function VocabularyNotebook({ currentVideoHash }: VocabularyNotebookProps
                                      bg-secondary hover:bg-secondary/80 border border-border/50
                                      transition-colors cursor-pointer text-muted-foreground hover:text-foreground"
                         >
-                          <Play size={10} /> {formatTime(word.videoTimestamp)}
+                          <Play size={10} /> {formatTime(mapSourceTimeToClip(currentVideo, word.videoTimestamp) ?? word.videoTimestamp)}
                         </button>
 
                         {/* SM-2 review buttons */}

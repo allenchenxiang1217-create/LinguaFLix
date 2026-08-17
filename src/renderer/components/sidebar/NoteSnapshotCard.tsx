@@ -2,6 +2,7 @@ import { useState, useMemo, useRef, useEffect, useCallback } from 'react'
 import { createPortal } from 'react-dom'
 import type { SnapshotEntry, VocabWord, OCRRegion } from '@shared/types'
 import { usePlayerStore } from '../../stores/playerStore'
+import { useAppStore } from '../../stores/appStore'
 import { useNoteStore } from '../../stores/noteStore'
 import { useVocabularyStore } from '../../stores/vocabularyStore'
 import { useSubtitleStore } from '../../stores/subtitleStore'
@@ -14,6 +15,7 @@ import { OCRService } from '../../services/ocr-service'
 import { deleteSnapshotCompletely, deleteWordOccurrenceFromSnapshot } from '../../services/deletion'
 import { findPhrases } from '../../lib/phrases'
 import { portalTarget } from '../../lib/portal'
+import { mapSourceTimeToClip } from '../../lib/review-clip'
 import {
   Clock, Play, Pencil, Check, X, Scan, StickyNote, ChevronDown, ChevronRight,
   Sparkles, BookmarkPlus, Loader2, ZoomIn, Trash2, AlertCircle
@@ -25,9 +27,10 @@ import {
 interface NoteSnapshotCardProps {
   snapshot: SnapshotEntry
   noteId: string
+  readOnly?: boolean
 }
 
-export function NoteSnapshotCard({ snapshot, noteId }: NoteSnapshotCardProps) {
+export function NoteSnapshotCard({ snapshot, noteId, readOnly = false }: NoteSnapshotCardProps) {
   const [expanded, setExpanded] = useState(false)
   const [editingText, setEditingText] = useState(false)
   const [editValue, setEditValue] = useState(snapshot.ocrText)
@@ -47,6 +50,7 @@ export function NoteSnapshotCard({ snapshot, noteId }: NoteSnapshotCardProps) {
   const play = usePlayerStore((s) => s.play)
   const pause = usePlayerStore((s) => s.pause)
   const videoHash = usePlayerStore((s) => s.videoHash)
+  const currentVideo = useAppStore((s) => (videoHash ? s.videos[videoHash] : undefined))
   const subtitles = useSubtitleStore((s) => s.subtitles)
   const { updateSnapshotText, updateSnapshotRegion, setOCRResult, addWordToSnapshot, updateSnapshotWordNote } = useNoteStore()
   const addWord = useVocabularyStore((s) => s.addWord)
@@ -113,7 +117,8 @@ export function NoteSnapshotCard({ snapshot, noteId }: NoteSnapshotCardProps) {
     if (wasBlockerVisible) subtitleStore.setBlockerVisible(false)
     // #2 点击笔记自动上滑：把卡片滚到侧栏滚动区上 1/3，避免被底部工具条遮挡。
     requestAnimationFrame(() => requestAnimationFrame(() => scrollToUpperThird()))
-    const startTime = Math.max(0, snapshot.timestamp - 3)
+    const clipTime = mapSourceTimeToClip(currentVideo, snapshot.timestamp) ?? snapshot.timestamp
+    const startTime = Math.max(0, clipTime - 3)
     seek(startTime)
     play()
     // Auto-pause after 6 seconds (3 before + 3 after)
@@ -175,7 +180,9 @@ export function NoteSnapshotCard({ snapshot, noteId }: NoteSnapshotCardProps) {
       contextSentence: displaySentence,
       snapshotId: snapshot.id,
       noteId,
-      videoHash: videoHash || '',
+      videoHash: currentVideo?.isReviewClip && currentVideo.reviewSourceHash
+        ? currentVideo.reviewSourceHash
+        : videoHash || '',
       videoTimestamp: snapshot.timestamp,
       aiAnalysis: '',
       userNote: '',
@@ -255,7 +262,9 @@ export function NoteSnapshotCard({ snapshot, noteId }: NoteSnapshotCardProps) {
           title={t('notes.playFrom')}
         >
           <Clock size={10} className="text-primary/70" />
-          <span className="text-[0.6875rem] font-mono font-semibold text-primary">{formatTime(snapshot.timestamp)}</span>
+          <span className="text-[0.6875rem] font-mono font-semibold text-primary">
+            {formatTime(mapSourceTimeToClip(currentVideo, snapshot.timestamp) ?? snapshot.timestamp)}
+          </span>
           <Play size={9} className="text-primary/50 group-hover:text-primary/80 transition-colors" />
         </button>
 
@@ -289,7 +298,7 @@ export function NoteSnapshotCard({ snapshot, noteId }: NoteSnapshotCardProps) {
                 {snapshot.isCorrected && (
                   <span className="text-[0.5625rem] text-success/60 bg-success/5 px-1.5 py-0.5 rounded-full">{t('notes.edited')}</span>
                 )}
-                {!editingText && (
+                {!readOnly && !editingText && (
                   <button
                     onClick={() => { setEditValue(snapshot.ocrText); setEditingText(true) }}
                     className="p-1 rounded hover:bg-secondary transition-colors cursor-pointer"
@@ -327,13 +336,15 @@ export function NoteSnapshotCard({ snapshot, noteId }: NoteSnapshotCardProps) {
             )}
 
             {/* Re-OCR button — opens the fullscreen region selector */}
-            <button
-              onClick={() => { setShowReOCR(true); setReOCRError(null) }}
-              className="mt-1 flex items-center gap-1 text-[0.625rem] text-muted-foreground/50 hover:text-primary/70 transition-colors cursor-pointer"
-            >
-              <Scan size={10} />
-              {t('notes.reRecognize')}
-            </button>
+            {!readOnly && (
+              <button
+                onClick={() => { setShowReOCR(true); setReOCRError(null) }}
+                className="mt-1 flex items-center gap-1 text-[0.625rem] text-muted-foreground/50 hover:text-primary/70 transition-colors cursor-pointer"
+              >
+                <Scan size={10} />
+                {t('notes.reRecognize')}
+              </button>
+            )}
           </div>
 
           {/* Clickable words for dictionary/AI */}
@@ -377,7 +388,7 @@ export function NoteSnapshotCard({ snapshot, noteId }: NoteSnapshotCardProps) {
                 <div className="mt-2 space-y-2 animate-fade-in">
                   <div className="flex items-center gap-2">
                     <span className="text-xs font-bold text-foreground">{selectedWord}</span>
-                    <button
+                    {!readOnly && <button
                       onClick={() => handleSaveWord(selectedWord)}
                       disabled={savedWordSet.has(selectedWord.toLowerCase())}
                       className={`flex items-center gap-1 px-2 py-0.5 text-[0.625rem] font-semibold rounded-lg transition-all cursor-pointer
@@ -391,14 +402,16 @@ export function NoteSnapshotCard({ snapshot, noteId }: NoteSnapshotCardProps) {
                       ) : (
                         <><BookmarkPlus size={9} /> {t('notes.save')}</>
                       )}
-                    </button>
-                    <button
-                      onClick={() => setShowAI(!showAI)}
-                      className="flex items-center gap-1 px-2 py-0.5 text-[0.625rem] font-semibold rounded-lg
-                                 bg-chart-3/10 text-chart-3 hover:bg-chart-3/20 transition-all cursor-pointer"
-                    >
-                      <Sparkles size={9} /> AI
-                    </button>
+                    </button>}
+                    {!readOnly && (
+                      <button
+                        onClick={() => setShowAI(!showAI)}
+                        className="flex items-center gap-1 px-2 py-0.5 text-[0.625rem] font-semibold rounded-lg
+                                   bg-chart-3/10 text-chart-3 hover:bg-chart-3/20 transition-all cursor-pointer"
+                      >
+                        <Sparkles size={9} /> AI
+                      </button>
+                    )}
                   </div>
 
                   {/* Dictionary */}
@@ -431,7 +444,7 @@ export function NoteSnapshotCard({ snapshot, noteId }: NoteSnapshotCardProps) {
                           <span className="flex items-center gap-1 text-[0.625rem] font-semibold uppercase tracking-wider text-muted-foreground/50">
                             <StickyNote size={10} /> {t('notes.myNotes')} · {selectedWord}
                           </span>
-                          {!editingWordNote && (
+                          {!readOnly && !editingWordNote && (
                             <button
                               onClick={() => { setWordNoteDraft(note || ''); setEditingWordNote(true) }}
                               className="p-1 rounded hover:bg-secondary transition-colors cursor-pointer"
@@ -485,14 +498,16 @@ export function NoteSnapshotCard({ snapshot, noteId }: NoteSnapshotCardProps) {
                   <span key={w.id} className="inline-flex items-center gap-1 px-2 py-0.5 text-[0.6875rem] font-medium rounded-full
                                                bg-primary/10 text-primary/80">
                     {w.word}
-                    <button
-                      onClick={() => handleDeleteSavedWord(w)}
-                      title={t('notes.deleteWordHint')}
-                      aria-label={`${t('notes.deleteWord')} ${w.word}`}
-                      className="p-0.5 rounded-full text-primary/50 hover:text-destructive hover:bg-destructive/15 transition-colors cursor-pointer"
-                    >
-                      <X size={9} />
-                    </button>
+                    {!readOnly && (
+                      <button
+                        onClick={() => handleDeleteSavedWord(w)}
+                        title={t('notes.deleteWordHint')}
+                        aria-label={`${t('notes.deleteWord')} ${w.word}`}
+                        className="p-0.5 rounded-full text-primary/50 hover:text-destructive hover:bg-destructive/15 transition-colors cursor-pointer"
+                      >
+                        <X size={9} />
+                      </button>
+                    )}
                   </span>
                 ))}
               </div>
@@ -500,7 +515,7 @@ export function NoteSnapshotCard({ snapshot, noteId }: NoteSnapshotCardProps) {
           )}
 
           {/* #10 删除这张截图（两步确认） */}
-          <button
+          {!readOnly && <button
             onClick={handleDeleteSnapshot}
             className={`w-full flex items-center justify-center gap-1.5 py-1.5 rounded-lg text-[0.625rem] font-medium
                         border transition-colors cursor-pointer ${
@@ -515,7 +530,7 @@ export function NoteSnapshotCard({ snapshot, noteId }: NoteSnapshotCardProps) {
             ) : (
               <><Trash2 size={11} /> {t('notes.deleteSnapshot')}</>
             )}
-          </button>
+          </button>}
         </div>
       )}
 

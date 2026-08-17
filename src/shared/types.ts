@@ -116,6 +116,16 @@ export interface VideoMeta {
   thumbnailDataUrl?: string        // auto-generated from first frame
   /** #10 自动剪辑生成的「复习视频」条目（区别于普通导入/下载的视频，用于覆盖旧剪辑时识别）。 */
   isReviewClip?: boolean
+  /** Source video and timestamp mapping for generated review clips. */
+  reviewSourceHash?: string
+  reviewSegments?: ReviewClipSegment[]
+}
+
+export interface ReviewClipSegment {
+  sourceStart: number
+  sourceEnd: number
+  clipStart: number
+  clipEnd: number
 }
 
 // ── App-level data ──

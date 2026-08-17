@@ -5,9 +5,10 @@ import { useI18n } from '../../i18n/useI18n'
 
 interface VideoControlsProps {
   onSnapshot: () => void
+  showSnapshot?: boolean
 }
 
-export function VideoControls({ onSnapshot }: VideoControlsProps) {
+export function VideoControls({ onSnapshot, showSnapshot = true }: VideoControlsProps) {
   const { t } = useI18n()
   const isPlaying = usePlayerStore((s) => s.isPlaying)
   const currentTime = usePlayerStore((s) => s.currentTime)
@@ -101,15 +102,17 @@ export function VideoControls({ onSnapshot }: VideoControlsProps) {
           {isFullscreen ? <Minimize2 size={15} /> : <Maximize2 size={15} />}
         </button>
 
-        {/* Snapshot */}
-        <button
-          onClick={onSnapshot}
-          className="ml-1 p-2 rounded-full hover:bg-primary/20 transition-all duration-150 cursor-pointer
-                     text-white/70 hover:text-primary active:scale-90"
-          title={t('video.takeSnapshot')}
-        >
-          <Camera size={16} />
-        </button>
+        {/* Snapshot is disabled in read-only review clips. */}
+        {showSnapshot && (
+          <button
+            onClick={onSnapshot}
+            className="ml-1 p-2 rounded-full hover:bg-primary/20 transition-all duration-150 cursor-pointer
+                       text-white/70 hover:text-primary active:scale-90"
+            title={t('video.takeSnapshot')}
+          >
+            <Camera size={16} />
+          </button>
+        )}
       </div>
     </div>
   )

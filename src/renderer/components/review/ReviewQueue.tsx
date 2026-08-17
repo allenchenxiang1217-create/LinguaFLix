@@ -180,6 +180,10 @@ export function ReviewQueue({ search, onOpenVideoAt, onOpenNotes }: ReviewQueueP
         ? filtered.filter((w) => (w.sm2?.repetition ?? 0) >= 3)
         : filtered
 
+  // The flashcard session must use the currently visible category. In
+  // particular, "Mastered" may contain no words that are due today.
+  const reviewCandidates = categoryFiltered.filter((w) => w.sm2.dueDate <= now)
+
   // 顶部三统计（与列表展示同源，直接从 words 推导）
   const masteredCount = words.filter((w) => (w.sm2?.repetition ?? 0) >= 3).length
   const totalDays = useMemo(() => {
@@ -513,14 +517,14 @@ export function ReviewQueue({ search, onOpenVideoAt, onOpenNotes }: ReviewQueueP
   }
 
   const startReview = () => {
-    const due = words
-      .filter((w) => w.sm2.dueDate <= new Date().toISOString())
-      .sort((a, b) => new Date(a.sm2.dueDate).getTime() - new Date(b.sm2.dueDate).getTime())
-    if (due.length === 0) {
+    const candidates = [...reviewCandidates].sort(
+      (a, b) => new Date(a.sm2.dueDate).getTime() - new Date(b.sm2.dueDate).getTime(),
+    )
+    if (candidates.length === 0) {
       showToast(t('review.noDueToday'))
       return
     }
-    useReviewStore.getState().startReview(due)
+    useReviewStore.getState().startReview(candidates)
   }
 
   /** 三键评分：忘了=2、模糊=3、记住了=首次4之后5（SM-2 原样保留，不加层）。 */
@@ -543,6 +547,12 @@ export function ReviewQueue({ search, onOpenVideoAt, onOpenNotes }: ReviewQueueP
 
   const cur = mode === 'review' ? queue[idx] ?? null : null
   const progress = done ? queue.length : Math.min(idx + 1, queue.length)
+
+  // Never leave the UI in an empty flashcard session, including sessions
+  // restored from stale state after a filter change or page reload.
+  useEffect(() => {
+    if (mode === 'review' && queue.length === 0) useReviewStore.getState().exit()
+  }, [mode, queue.length])
 
   // 切词/退出时重置 AI 状态，并取消仍在进行中的请求。
   useEffect(() => {
@@ -600,10 +610,12 @@ export function ReviewQueue({ search, onOpenVideoAt, onOpenNotes }: ReviewQueueP
           <div className="flex flex-col items-end gap-1.5">
             <button
               onClick={startReview}
+              disabled={reviewCandidates.length === 0}
               className="h-11 px-6 rounded-full bg-primary hover:bg-primary-hover active:scale-[0.98]
-                         text-white text-sm font-semibold transition-all cursor-pointer flex items-center gap-1"
+                         text-white text-sm font-semibold transition-all cursor-pointer flex items-center gap-1
+                         disabled:opacity-45 disabled:cursor-not-allowed disabled:hover:bg-primary"
             >
-              {t('review.startReview')} <span className="tabular-nums">({dueCount})</span>
+              {t('review.startReview')} <span className="tabular-nums">({reviewCandidates.length})</span>
             </button>
             <p className="text-xs text-muted-foreground/60">
               {t('review.meta', { n: words.length, m: dueCount })}
@@ -637,10 +649,20 @@ export function ReviewQueue({ search, onOpenVideoAt, onOpenNotes }: ReviewQueueP
           </div>
         ) : categoryFiltered.length === 0 ? (
           /* 分类过滤无结果 */
-          <div className="rounded-2xl border border-border/50 bg-card/60 p-10 text-center">
+          <div className="rounded-2xl border border-border/50 bg-card/60 p-10 flex flex-col items-center text-center">
             <p className="text-[0.9375rem] font-semibold text-foreground">
-              {t('review.noWordsFound')}
+              {t('review.noReviewCandidates')}
             </p>
+            <p className="mt-2 text-sm text-muted-foreground">
+              {t('review.noReviewCandidatesHint')}
+            </p>
+            <button
+              onClick={() => setReviewFilter('all')}
+              className="mt-6 h-10 px-5 rounded-xl bg-foreground/5 hover:bg-foreground/10 border border-border/60
+                         text-sm font-medium text-foreground transition-colors cursor-pointer"
+            >
+              {t('review.filterAll')}
+            </button>
           </div>
         ) : (
           <div className="rounded-2xl border border-border/50 bg-card/60 overflow-hidden">

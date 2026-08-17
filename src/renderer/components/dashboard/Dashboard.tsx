@@ -2,7 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { UsageTutorial } from './UsageTutorial'
 import { useAppStore } from '../../stores/appStore'
 import { usePlayerStore } from '../../stores/playerStore'
-import { loadNotebook, getNotebookCounts } from '../../services/storage-service'
+import { loadNotebook, getNotebookCounts, VideoOcrRegionStorage } from '../../services/storage-service'
 import { toMediaUrl, resolveReplayableMedia } from '../../services/stream-resolver'
 import { useNoteStore } from '../../stores/noteStore'
 import { useSubtitleStore } from '../../stores/subtitleStore'
@@ -32,9 +32,22 @@ function thumbClass(hash: string): string {
 }
 
 export function Dashboard() {
-  const { videos, lastVideoHash, streak, totalWords, todayReviewCount, refreshStats, setAppPhase, removeVideo, markOpened } = useAppStore()
+  const {
+    videos,
+    lastVideoHash,
+    streak,
+    totalWords,
+    todayReviewCount,
+    refreshStats,
+    setAppPhase,
+    removeVideo,
+    markOpened,
+    dashboardReturnView,
+    setDashboardReturnView,
+  } = useAppStore()
   const loadVideo = usePlayerStore((s) => s.loadVideo)
   const loadNotebookStore = useNoteStore((s) => s.loadNotebook)
+  const loadVideoOcrRegion = useNoteStore((s) => s.loadVideoOcrRegion)
   const words = useVocabularyStore((s) => s.words)
   const { t, language } = useI18n()
   const [deleteConfirmHash, setDeleteConfirmHash] = useState<string | null>(null)
@@ -49,15 +62,20 @@ export function Dashboard() {
     refreshStats()
   }, [refreshStats])
 
-  // 从「复习」跳播放器再返回：恢复 review 视图。闪卡会话（mode/queue/idx）由
-  // reviewStore 持有，跨 Dashboard 卸载存活，返回时原样继续。
+  // Restore the dashboard view that opened the player. Flashcard review has its
+  // own return marker and takes precedence over a normal video navigation.
   useEffect(() => {
     if (useReviewStore.getState().returnToReview) {
       setNavView('review')
       useReviewStore.getState().setReturnToReview(false)
+      setDashboardReturnView('library')
+      return
     }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [])
+    if (dashboardReturnView !== 'library') {
+      setNavView(dashboardReturnView)
+      setDashboardReturnView('library')
+    }
+  }, [dashboardReturnView, setDashboardReturnView])
 
   // Shared open path for "Continue" and clicking a video card. Before handing a
   // stored record to the player, verify it can still be played: records whose
@@ -69,13 +87,17 @@ export function Dashboard() {
     setLoadError(null)
     setDeleteConfirmHash(null) // 打开视频时取消任何待确认的删除
     let status: Awaited<ReturnType<typeof resolveReplayableMedia>>
+    const notebookHash = video.isReviewClip && video.reviewSourceHash ? video.reviewSourceHash : hash
+    const returnView = navView === 'recent' || navView === 'review' || navView === 'clip' ? navView : 'library'
     try {
       status = await resolveReplayableMedia(video)
     } catch {
-      const notes = await loadNotebook(hash)
-      loadNotebookStore(notes, hash)
+      const notes = await loadNotebook(notebookHash)
+      loadNotebookStore(notes, notebookHash)
+      loadVideoOcrRegion(VideoOcrRegionStorage.load(notebookHash))
       loadVideo(toMediaUrl(video.filePath), video.hash)
       markOpened(hash)
+      setDashboardReturnView(returnView)
       setAppPhase('player')
       return
     }
@@ -87,16 +109,18 @@ export function Dashboard() {
       )
       return
     }
-    const notes = await loadNotebook(hash)
-    loadNotebookStore(notes, hash)
+    const notes = await loadNotebook(notebookHash)
+    loadNotebookStore(notes, notebookHash)
+    loadVideoOcrRegion(VideoOcrRegionStorage.load(notebookHash))
     loadVideo(status.src, video.hash)
     markOpened(hash)
+    setDashboardReturnView(returnView)
     setAppPhase('player')
-  }, [videos, loadNotebook, loadNotebookStore, loadVideo, markOpened, t])
+  }, [videos, navView, loadNotebook, loadNotebookStore, loadVideo, loadVideoOcrRegion, markOpened, setDashboardReturnView, setAppPhase, t])
 
   const handleContinue = () => {
-    if (!lastVideoHash) return
-    openVideo(lastVideoHash)
+    if (!lastVideo) return
+    openVideo(lastVideo.hash)
   }
 
   const handleNewVideo = () => {
@@ -115,7 +139,7 @@ export function Dashboard() {
 
   // 空词库「去笔记看看」：有观看历史回到上次视频，否则进入新的导入/笔记流程。
   const handleGoToNotes = () => {
-    if (lastVideoHash) openVideo(lastVideoHash)
+    if (lastVideo) openVideo(lastVideo.hash)
     else handleNewVideo()
   }
 
@@ -129,12 +153,18 @@ export function Dashboard() {
     }
   }
 
-  const hasHistory = Object.keys(videos).length > 0
-  const lastVideo = lastVideoHash ? videos[lastVideoHash] : null
+  // 复习视频只在「复习视频」页面管理，不作为普通视频出现在视频库/最近学习。
+  const libraryVideos = Object.values(videos).filter((v) => !v.isReviewClip)
+  const hasHistory = libraryVideos.length > 0
+  const lastVideo = lastVideoHash && !videos[lastVideoHash]?.isReviewClip
+    ? videos[lastVideoHash]
+    : libraryVideos
+      .filter((v) => v.lastOpenedAt > 0)
+      .sort((a, b) => b.lastOpenedAt - a.lastOpenedAt)[0] ?? null
 
   const searchQuery = search.trim().toLowerCase()
   // Library 视图按文件名排序；Recent 视图按最近打开时间倒序（lastOpenedAt 为 0 的旧记录排除在外）。
-  const allVideos = Object.values(videos).filter(
+  const allVideos = libraryVideos.filter(
     (v) => !searchQuery || v.fileName.toLowerCase().includes(searchQuery),
   )
   const filteredVideos = navView === 'recent'
@@ -171,7 +201,7 @@ export function Dashboard() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [recentHashKey, navView])
 
-  const videoCount = Object.keys(videos).length
+  const videoCount = libraryVideos.length
 
   const formatRelative = (ts: number) => {
     const days = Math.floor((Date.now() - ts) / 86400000)
@@ -234,13 +264,6 @@ export function Dashboard() {
             <Scissors size={16} className="opacity-70" />
             {t('dashboard.nav.clip')}
           </button>
-          <button
-            onClick={() => { setDeleteConfirmHash(null); setSearch(''); setNavView('settings') }}
-            className={`${navBase} ${navView === 'settings' ? 'bg-foreground/9 text-foreground font-semibold' : 'text-muted-foreground hover:bg-foreground/5 hover:text-foreground'}`}
-          >
-            <Settings size={16} className="opacity-70" />
-            {t('dashboard.nav.settings')}
-          </button>
         </nav>
 
         <div className="px-3 py-3 border-t border-border/60 space-y-1">
@@ -253,6 +276,13 @@ export function Dashboard() {
           >
             {themeMode === 'dark' ? <Moon size={16} className="opacity-70" /> : <Sun size={16} className="opacity-70" />}
             {themeMode === 'dark' ? t('settings.appearance.dark') : t('settings.appearance.light')}
+          </button>
+          <button
+            onClick={() => { setDeleteConfirmHash(null); setSearch(''); setNavView('settings') }}
+            className={`${navBase} ${navView === 'settings' ? 'bg-foreground/9 text-foreground font-semibold' : 'text-muted-foreground hover:bg-foreground/5 hover:text-foreground'}`}
+          >
+            <Settings size={16} className="opacity-70" />
+            {t('dashboard.nav.settings')}
           </button>
           <button
             onClick={() => { setDeleteConfirmHash(null); setSearch(''); setNavView('tutorial') }}

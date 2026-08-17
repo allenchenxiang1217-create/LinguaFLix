@@ -51,6 +51,8 @@ export function VideoPlayer() {
 
   const { t } = useI18n()
   const videoSrc = usePlayerStore((s) => s.videoSrc)
+  const videoHash = usePlayerStore((s) => s.videoHash)
+  const isReviewClip = useAppStore((s) => (videoHash ? !!s.videos[videoHash]?.isReviewClip : false))
   const isFullscreen = usePlayerStore((s) => s.isFullscreen)
   const setVideoRef = usePlayerStore((s) => s.setVideoRef)
   const setContainerRef = usePlayerStore((s) => s.setContainerRef)
@@ -102,6 +104,7 @@ export function VideoPlayer() {
   // #2 全屏点开笔记/生词面板时隐藏字幕挡块（与非全屏跳转笔记的体验一致），
   // 让字幕不被遮挡；关闭面板后按原可见状态还原。
   const blockerWasVisibleRef = useRef(false)
+  const blockerBeforeReviewRef = useRef<boolean | null>(null)
   useEffect(() => {
     const st = useSubtitleStore.getState()
     if (fsPanel) {
@@ -120,6 +123,19 @@ export function VideoPlayer() {
     thumbDoneRef.current = null
     thumbSeekRef.current = null
   }, [videoSrc])
+
+  // Review clips start with the blocker hidden so the highlighted subtitle can
+  // be seen. Normal videos retain the user's existing visibility preference.
+  useEffect(() => {
+    const blocker = useSubtitleStore.getState()
+    if (isReviewClip) {
+      if (blockerBeforeReviewRef.current == null) blockerBeforeReviewRef.current = blocker.blockerVisible
+      blocker.setBlockerVisible(false)
+    } else if (blockerBeforeReviewRef.current != null) {
+      blocker.setBlockerVisible(blockerBeforeReviewRef.current)
+      blockerBeforeReviewRef.current = null
+    }
+  }, [isReviewClip, videoHash])
 
   // 从「待复习生词」「搜索生词」等入口跳到指定时间戳：等视频就绪后应用并清空。
   // 用短延迟避开自动缩略图 capture 的 seek；若媒体管线吞掉 seek（离屏/首帧未稳时偶发，
@@ -230,6 +246,7 @@ export function VideoPlayer() {
 
   const handleSnapshot = useCallback(async () => {
     // 无感截屏：与快捷键（takeSnapshotRef）一致，只做闪光反馈，不弹出侧边栏
+    if (isReviewClip) return
     const snapshotId = await takeSnapshot()
     if (snapshotId && containerRef.current) {
       // Flash feedback
@@ -239,7 +256,7 @@ export function VideoPlayer() {
         if (containerRef.current) containerRef.current.style.boxShadow = ''
       }, 200)
     }
-  }, [takeSnapshot])
+  }, [isReviewClip, takeSnapshot])
 
   if (!videoSrc) return null
 
@@ -354,7 +371,7 @@ export function VideoPlayer() {
       <SubtitleOverlay />
       <SubtitleBlocker />
       <PlayerToolRail />
-      <VideoControls onSnapshot={handleSnapshot} />
+      <VideoControls onSnapshot={handleSnapshot} showSnapshot={!isReviewClip} />
     </div>
   )
 }

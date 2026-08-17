@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from 'react'
 import { createPortal } from 'react-dom'
 import { usePlayerStore } from '../../stores/playerStore'
+import { useAppStore } from '../../stores/appStore'
 import { useSubtitleStore } from '../../stores/subtitleStore'
 import { Eye, EyeOff, SquareDashed, Gauge, Volume2, VolumeX } from 'lucide-react'
 import { BlockerPanel } from '../subtitles/BlockerSettings'
@@ -47,6 +48,8 @@ export function PlayerToolRail() {
   const setPlaybackRate = usePlayerStore((s) => s.setPlaybackRate)
   const volume = usePlayerStore((s) => s.volume)
   const setVolume = usePlayerStore((s) => s.setVolume)
+  const videoHash = usePlayerStore((s) => s.videoHash)
+  const isReviewClip = useAppStore((s) => (videoHash ? !!s.videos[videoHash]?.isReviewClip : false))
 
   const openPanel = (kind: Exclude<PanelKind, null>, e: React.MouseEvent<HTMLButtonElement>) => {
     if (panel === kind) { setPanel(null); return }
@@ -95,8 +98,8 @@ export function PlayerToolRail() {
         <SquareDashed size={15} />
       </button>
 
-      {/* OCR 区域 */}
-      <OcrRegionButton variant="icon" />
+      {/* OCR 区域仅用于普通视频；复习视频保持四按钮布局。 */}
+      {!isReviewClip && <OcrRegionButton variant="icon" />}
 
       {/* 倍速 */}
       <button

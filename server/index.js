@@ -794,7 +794,7 @@ async function handleRequest(req, res) {
 
       // 3) 并行抽取片段（重编码，并发 2 防吃满 CPU）→ concat demuxer 合并。
       const workDir = fs.mkdtempSync(path.join(os.tmpdir(), 'linguaflix-clip-'));
-      const segFiles = [];
+      const segFiles = new Array(merged.length);
       try {
         await mapLimit(merged, 2, async (w, i) => {
           const out = path.join(workDir, `seg_${String(i).padStart(3, '0')}.mp4`);
@@ -810,7 +810,7 @@ async function handleRequest(req, res) {
             out,
           ];
           await execFileAsync(ffmpeg, args, { timeout: 120000, maxBuffer: 10 * 1024 * 1024 });
-          segFiles.push(out);
+          segFiles[i] = out;
         });
         if (segFiles.length === 0) {
           jsonResponse(res, 500, { error: 'extraction_failed' });
@@ -822,12 +822,22 @@ async function handleRequest(req, res) {
         const outPath = path.join(CLIPS_DIR, `review_${Date.now()}.mp4`);
         await execFileAsync(ffmpeg, ['-y', '-f', 'concat', '-safe', '0', '-i', listPath, '-c', 'copy', '-movflags', '+faststart', outPath], { timeout: 180000, maxBuffer: 10 * 1024 * 1024 });
 
+        const clipSegments = merged.map((w, i) => {
+          const clipStart = merged.slice(0, i).reduce((sum, prior) => sum + (prior.end - prior.start), 0);
+          return {
+            sourceStart: w.start,
+            sourceEnd: w.end,
+            clipStart,
+            clipEnd: clipStart + (w.end - w.start),
+          };
+        });
         const clipDuration = merged.reduce((sum, w) => sum + (w.end - w.start), 0);
         jsonResponse(res, 200, {
           filePath: outPath,
           fileName: path.basename(outPath),
           duration: Math.round(clipDuration),
           clipCount: merged.length,
+          segments: clipSegments,
         });
       } catch (err) {
         console.error('[review-clip] failed:', err && err.message);

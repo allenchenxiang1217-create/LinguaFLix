@@ -1,5 +1,5 @@
 import { useState } from 'react'
-import { BookOpen, ChevronDown, ImageIcon } from 'lucide-react'
+import { BookOpen, ChevronDown } from 'lucide-react'
 import { useI18n } from '../../i18n/useI18n'
 import { useSettingsStore, formatShortcutKey } from '../../stores/settingsStore'
 import type { ShortcutAction, ShortcutMap } from '../../stores/settingsStore'
@@ -56,16 +56,6 @@ function ShortcutKey({ action, shortcuts }: { action: ShortcutAction; shortcuts:
   return <Kbd>{formatShortcutKey(shortcuts[action])}</Kbd>
 }
 
-/** 预留图片位：为将来的截图/插图占位，教程改版时版式不跳动。 */
-function Shot({ label }: { label: string }) {
-  return (
-    <div className="rounded-xl border-2 border-dashed border-border/50 bg-background/40 flex flex-col items-center justify-center gap-2 py-10 px-6">
-      <ImageIcon size={20} className="text-muted-foreground/30" />
-      <span className="text-[0.6875rem] text-muted-foreground/40 text-center">{label}</span>
-    </div>
-  )
-}
-
 export function UsageTutorial({ defaultOpen = false }: { defaultOpen?: boolean }) {
   const [open, setOpen] = useState(defaultOpen)
   const { t } = useI18n()
@@ -107,33 +97,36 @@ export function UsageTutorial({ defaultOpen = false }: { defaultOpen?: boolean }
               rows={[
                 [t('tutorial.s1.r1k'), t('tutorial.s1.r1v')],
                 [t('tutorial.s1.r2k'), t('tutorial.s1.r2v')],
-                [t('tutorial.s1.r3k'), <span key="1"><b>Continue</b> {t('tutorial.s1.r3vA')} · <b>Review</b> {t('tutorial.s1.r3vB')} · <b>New Video</b> {t('tutorial.s1.r3vC')}</span>],
+                [t('tutorial.s1.r3k'), t('tutorial.s1.r3v')],
                 [t('tutorial.s1.r4k'), t('tutorial.s1.r4v')],
               ]}
             />
             <p className="font-medium text-foreground/85">{t('tutorial.s1.player')}</p>
-            <pre className="rounded-lg bg-background/60 border border-border/30 p-3 text-[0.6875rem] font-mono text-foreground/70 overflow-x-auto leading-snug">{t('tutorial.s1.diagram')}</pre>
-            <Shot label={t('tutorial.img1')} />
+            <img
+              src="/tutorial-player-demo.png"
+              alt={t('tutorial.img1')}
+              className="w-full h-auto rounded-xl border border-border/40 bg-black object-contain"
+            />
           </Section>
 
           <Section num="2" title={t('tutorial.s2.title')}>
-            <p>{t('tutorial.s2.leadA')}<b>New Video</b>{t('tutorial.s2.leadB')}</p>
+            <p>{t('tutorial.s2.leadA')}<b>{t('tutorial.labels.newVideo')}</b>{t('tutorial.s2.leadB')}</p>
             <ol className="list-decimal list-outside pl-4 space-y-1">
-              <li><b>{t('tutorial.s2.o1a')}</b>{t('tutorial.s2.o1b')}<code className="text-[0.6875rem] bg-background/60 px-1 rounded">Open Video File</code>{t('tutorial.s2.o1c')}</li>
+              <li><b>{t('tutorial.s2.o1a')}</b>{t('tutorial.s2.o1b')}<code className="text-[0.6875rem] bg-background/60 px-1 rounded">{t('tutorial.labels.openVideoFile')}</code>{t('tutorial.s2.o1c')}</li>
               <li>
-                <b>{t('tutorial.s2.o2a')}</b>{t('tutorial.s2.o2b')}<b>{t('tutorial.s2.o2c')}</b>{t('tutorial.s2.o2d')}<b>{t('tutorial.s2.o2e')}</b>{t('tutorial.s2.o2f')}<code className="text-[0.6875rem] bg-background/60 px-1 rounded">Install yt-dlp</code>{t('tutorial.s2.o2g')}
+                <b>{t('tutorial.s2.o2a')}</b>{t('tutorial.s2.o2b')}<b>{t('tutorial.s2.o2c')}</b>{t('tutorial.s2.o2d')}<b>{t('tutorial.s2.o2e')}</b>{t('tutorial.s2.o2f')}<code className="text-[0.6875rem] bg-background/60 px-1 rounded">{t('tutorial.labels.installTool')}</code>{t('tutorial.s2.o2g')}
               </li>
               <li><b>{t('tutorial.s2.o3a')}</b>{t('tutorial.s2.o3b')}</li>
             </ol>
-            <p className="text-foreground/60">{t('tutorial.s2.tipA')}<code className="text-[0.6875rem] bg-background/60 px-1 rounded">Change</code>{t('tutorial.s2.tipB')}<code className="text-[0.6875rem] bg-background/60 px-1 rounded">Subtitles</code>{t('tutorial.s2.tipC')}</p>
+            <p className="text-foreground/60">{t('tutorial.s2.tipA')}<code className="text-[0.6875rem] bg-background/60 px-1 rounded">{t('tutorial.labels.changeVideo')}</code>{t('tutorial.s2.tipB')}<code className="text-[0.6875rem] bg-background/60 px-1 rounded">{t('tutorial.labels.subtitles')}</code>{t('tutorial.s2.tipC')}</p>
           </Section>
 
           <Section num="3" title={t('tutorial.s3.title')}>
             <ul className="list-disc list-outside pl-4 space-y-1">
-              <li>{t('tutorial.s3.l1a')}<code className="text-[0.6875rem] bg-background/60 px-1 rounded">Load external subtitles (SRT/VTT)</code>{t('tutorial.s3.l1b')}<b>Subtitles</b>{t('tutorial.s3.l1c')}</li>
+              <li>{t('tutorial.s3.l1a')}<code className="text-[0.6875rem] bg-background/60 px-1 rounded">{t('tutorial.labels.loadSubtitles')}</code>{t('tutorial.s3.l1b')}<b>{t('tutorial.labels.subtitles')}</b>{t('tutorial.s3.l1c')}</li>
               <li>{t('tutorial.s3.l2a')}<code className="text-[0.6875rem] bg-background/60 px-1 rounded">.srt / .vtt / .ass / .ssa</code>{t('tutorial.s3.l2b')}</li>
-              <li>{t('tutorial.s3.l3a')}<b>{t('tutorial.s3.l3zh')}</b>{t('tutorial.s3.l3b')}<b>{t('tutorial.s3.l3en')}</b>{t('tutorial.s3.l3c')}<b>Transcript</b>{t('tutorial.s3.l3d')}<b>{t('tutorial.s3.l3e')}</b>{t('tutorial.s3.l3f')}</li>
-              <li>{t('tutorial.s3.l4a')}<b>Set OCR region</b>{t('tutorial.s3.l4b')}</li>
+              <li>{t('tutorial.s3.l3a')}<b>{t('tutorial.s3.l3zh')}</b>{t('tutorial.s3.l3b')}<b>{t('tutorial.s3.l3en')}</b>{t('tutorial.s3.l3c')}<b>{t('tutorial.labels.transcript')}</b>{t('tutorial.s3.l3d')}<b>{t('tutorial.s3.l3e')}</b>{t('tutorial.s3.l3f')}</li>
+              <li>{t('tutorial.s3.l4a')}<b>{t('tutorial.labels.ocrRegion')}</b>{t('tutorial.s3.l4b')}</li>
             </ul>
             <Note>{t('tutorial.s3.note')}</Note>
           </Section>
@@ -173,14 +166,14 @@ export function UsageTutorial({ defaultOpen = false }: { defaultOpen?: boolean }
             <p className="font-medium text-foreground/85">{t('tutorial.s5.ocr')}</p>
             <ol className="list-decimal list-outside pl-4 space-y-1">
               <li>{t('tutorial.s5.o1a')}<b>{t('tutorial.s5.o1b')}</b>{t('tutorial.s5.o1c')}</li>
-              <li>{t('tutorial.s5.o2a')}<b>Set OCR region</b>{t('tutorial.s5.o2b')}</li>
+              <li>{t('tutorial.s5.o2a')}<b>{t('tutorial.labels.ocrRegion')}</b>{t('tutorial.s5.o2b')}</li>
               <li>{t('tutorial.s5.o3')}</li>
-              <li>{t('tutorial.s5.o4a')}<b>Save region</b>{t('tutorial.s5.o4b')}</li>
+              <li>{t('tutorial.s5.o4a')}<b>{t('tutorial.labels.saveRegion')}</b>{t('tutorial.s5.o4b')}</li>
             </ol>
             <p className="font-medium text-foreground/85">{t('tutorial.s5.notes')}</p>
             <ul className="list-disc list-outside pl-4 space-y-1">
               <li>{t('tutorial.s5.n1a')}<b>{t('tutorial.s5.n1b')}</b>{t('tutorial.s5.n1c')}<b>{t('tutorial.s5.n1d')}</b>{t('tutorial.s5.n1e')}</li>
-              <li>{t('tutorial.s5.n2a')}<b>{t('tutorial.s5.n2b')}</b>{t('tutorial.s5.n2c')}<b>{t('tutorial.s5.n2d')}</b>{t('tutorial.s5.n2e')}<b>Re-recognize area</b>{t('tutorial.s5.n2f')}</li>
+              <li>{t('tutorial.s5.n2a')}<b>{t('tutorial.s5.n2b')}</b>{t('tutorial.s5.n2c')}<b>{t('tutorial.s5.n2d')}</b>{t('tutorial.s5.n2e')}<b>{t('tutorial.labels.reRecognize')}</b>{t('tutorial.s5.n2f')}</li>
               <li>{t('tutorial.s5.n3')}</li>
             </ul>
             <p className="font-medium text-foreground/85">{t('tutorial.s5.del')}</p>
@@ -189,21 +182,19 @@ export function UsageTutorial({ defaultOpen = false }: { defaultOpen?: boolean }
               <li>{t('tutorial.s5.d2a')}<b>{t('tutorial.s5.d2b')}</b>{t('tutorial.s5.d2c')}</li>
               <li>{t('tutorial.s5.d3')}</li>
             </ul>
-            <Shot label={t('tutorial.img2')} />
           </Section>
 
           <Section num="6" title={t('tutorial.s6.title')}>
             <ol className="list-decimal list-outside pl-4 space-y-1">
               <li>{t('tutorial.s6.o1')}</li>
-              <li>{t('tutorial.s6.o2a')}<b>{t('tutorial.s6.o2b')}</b>{t('tutorial.s6.o2c')}<b>Save</b>{t('tutorial.s6.o2d')}<b>AI</b>{t('tutorial.s6.o2e')}</li>
-              <li>{t('tutorial.s6.o3a')}<b>Saved Words</b>{t('tutorial.s6.o3b')}<b>Vocab</b>{t('tutorial.s6.o3c')}</li>
+              <li>{t('tutorial.s6.o2a')}<b>{t('tutorial.s6.o2b')}</b>{t('tutorial.s6.o2c')}<b>{t('tutorial.labels.save')}</b>{t('tutorial.s6.o2d')}<b>{t('tutorial.labels.ai')}</b>{t('tutorial.s6.o2e')}</li>
+              <li>{t('tutorial.s6.o3a')}<b>{t('tutorial.labels.savedWords')}</b>{t('tutorial.s6.o3b')}<b>{t('tutorial.labels.wordbook')}</b>{t('tutorial.s6.o3c')}</li>
             </ol>
             <div>
               <p className="font-medium text-foreground/85 mb-1">{t('tutorial.s6.apiTitle')}</p>
               <pre className="rounded-lg bg-background/60 border border-border/30 p-3 text-[0.6875rem] font-mono text-foreground/70 overflow-x-auto leading-snug">{t('tutorial.s6.apiCode')}</pre>
               <p className="text-foreground/60 mt-1">{t('tutorial.s6.apiNote')}</p>
             </div>
-            <Shot label={t('tutorial.img3')} />
           </Section>
 
           <Section num="7" title={t('tutorial.s7.title')}>

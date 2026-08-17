@@ -1,6 +1,7 @@
 import { useCallback } from 'react'
 import { useNoteStore, DEFAULT_OCR_REGION } from '../stores/noteStore'
 import { usePlayerStore } from '../stores/playerStore'
+import { useAppStore } from '../stores/appStore'
 import { useSubtitleStore } from '../stores/subtitleStore'
 import { useToastStore } from '../stores/toastStore'
 import { useI18n } from '../i18n/useI18n'
@@ -14,6 +15,8 @@ export function useScreenshot() {
   const takeSnapshot = useCallback(async () => {
     const videoEl = usePlayerStore.getState().videoRef
     if (!videoEl || videoEl.readyState < 2) return null
+    const activeHash = usePlayerStore.getState().videoHash
+    if (activeHash && useAppStore.getState().videos[activeHash]?.isReviewClip) return null
 
     const currentTime = videoEl.currentTime
 
