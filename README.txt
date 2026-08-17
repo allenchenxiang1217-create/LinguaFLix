@@ -75,7 +75,7 @@ FFmpeg 视频处理工具
 
 环境要求
 
-Node.js 20 或更高版本
+Node.js 22 或更高版本（需要系统根证书支持）
 npm
 FFmpeg（使用自动剪辑功能时需要）
 macOS、Windows 或 Linux

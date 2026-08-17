@@ -5,6 +5,11 @@
 set -e
 DIR="$(cd "$(dirname "$0")" && pwd)"
 
+# Use the operating system's trusted root certificates when Node downloads
+# yt-dlp. This keeps TLS verification enabled while supporting machines whose
+# certificate chain is installed in the macOS/Windows system store.
+export NODE_USE_SYSTEM_CA=1
+
 echo "🦊 Starting LinguaFlix..."
 
 # Start backend server
