@@ -60,7 +60,7 @@ export function VideoPanel({ onBack, onOpenSettings }: VideoPanelProps) {
       ) : null}
 
       {/* Video Player fills the main space */}
-      <div className="flex-1 flex items-center justify-center min-h-0">
+      <div className="flex-1 min-h-0 relative">
         <VideoPlayer />
       </div>
 

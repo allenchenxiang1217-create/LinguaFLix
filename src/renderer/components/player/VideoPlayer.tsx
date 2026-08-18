@@ -303,11 +303,7 @@ export function VideoPlayer() {
       <video
         ref={videoRef}
         src={videoSrc}
-        className={
-          isFullscreen
-            ? 'w-full h-full object-cover relative z-10'
-            : 'max-w-full max-h-full object-contain relative z-10'
-        }
+        className="w-full h-full object-cover relative z-10"
         onTimeUpdate={handleTimeUpdate}
         onLoadedMetadata={handleLoadedMetadata}
         onCanPlay={handleCanPlay}
