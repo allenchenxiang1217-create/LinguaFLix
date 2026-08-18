@@ -171,6 +171,16 @@ export const YtDlpManager = {
   async getPath(): Promise<string> {
     if (cachedPath) return cachedPath
 
+    // 0. Bundled binary (packaged app ships yt-dlp.exe in resources/ so users
+    //    never need to install or download anything).
+    const bundledPath = join(process.resourcesPath, 'yt-dlp.exe')
+    if (app.isPackaged && existsSync(bundledPath)) {
+      cachedPath = bundledPath
+      availabilityChecked = true
+      availabilityResult = true
+      return cachedPath
+    }
+
     // 1. Check system PATH
     const inPath = await findInPath()
     if (inPath) {

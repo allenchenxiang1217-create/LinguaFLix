@@ -230,8 +230,8 @@ export function registerIpcHandlers(): void {
         event.sender.send('stream:download-progress', progress)
       })
 
-      // Extract just the file name for display
-      const fileName = filePath.split('/').pop() || filePath
+      // Extract just the file name for display (handle Windows backslash paths)
+      const fileName = basename(filePath)
 
       return {
         success: true,

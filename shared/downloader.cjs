@@ -23,6 +23,26 @@ const child_process = require('child_process')
 const path = require('path')
 const fs = require('fs')
 
+// ── Windows stdout encoding ──
+// On a Chinese/Japanese Windows system, Python (and therefore the PyInstaller-
+// packaged yt-dlp.exe) writes non-ASCII paths to stdout in the console code page
+// (GBK/cp936), NOT UTF-8. Node's Buffer#toString() decodes as UTF-8, which mangles
+// every CJK filename → the API returns a mojibake path → the renderer 404s on
+// /media/<mojibake>. TextDecoder('gbk') is streaming and handles multi-byte
+// characters split across data chunks (unlike StringDecoder, which only supports
+// utf8/utf16le/latin1/base64/hex).
+function createStdoutDecoder() {
+  if (process.platform === 'win32') {
+    try {
+      return new TextDecoder('gbk')
+    } catch {
+      // Fall back to UTF-8 if full-icu isn't available.
+      return null
+    }
+  }
+  return null
+}
+
 // ── Format forcing ──
 
 // FORCE H.264 (avc1) video + AAC (mp4a) audio in an mp4 container — the combo
@@ -54,9 +74,15 @@ const STABILITY_ARGS = [
 /**
  * Build the full yt-dlp argument list for a download. Split out so callers can
  * inspect/override args if they ever need a special case.
+ *
+ * `ffmpegLocation` (optional): directory containing ffmpeg/ffprobe. Passed to
+ * yt-dlp via --ffmpeg-location so a packaged app's bundled ffmpeg is used even
+ * when nothing is on PATH — without it, yt-dlp would fail to merge DASH
+ * video+audio streams ("ERROR: You have requested merging of multiple formats
+ * but ffmpeg is not installed").
  */
-function buildDownloadArgs({ outputTemplate, url }) {
-  return [
+function buildDownloadArgs({ outputTemplate, url, ffmpegLocation }) {
+  const args = [
     '-f', FORMAT_SELECTOR,
     ...STABILITY_ARGS,
     '--merge-output-format', 'mp4',
@@ -66,6 +92,10 @@ function buildDownloadArgs({ outputTemplate, url }) {
     '--print', 'after_move:filepath',
     url,
   ]
+  if (ffmpegLocation) {
+    args.unshift('--ffmpeg-location', ffmpegLocation)
+  }
+  return args
 }
 
 // ── Codec probe ──
@@ -102,6 +132,9 @@ function runDownloadOnce({ ytdlpPath, args, onProgress, downloadDir }) {
     let lastPercent = 0
     let outputPath = ''
     const stderrTail = []
+    // Decode yt-dlp's stdout with the correct code page on Windows (GBK for
+    // CJK locales) so file paths with non-ASCII characters survive intact.
+    const outDecoder = createStdoutDecoder()
 
     proc.stderr.on('data', (data) => {
       const text = data.toString()
@@ -126,9 +159,16 @@ function runDownloadOnce({ ytdlpPath, args, onProgress, downloadDir }) {
       }
     })
 
-    proc.stdout.on('data', (data) => { outputPath += data.toString() })
+    proc.stdout.on('data', (data) => {
+      if (outDecoder) {
+        outputPath += outDecoder.decode(data, { stream: true })
+      } else {
+        outputPath += data.toString()
+      }
+    })
 
     proc.on('close', async (code) => {
+      if (outDecoder) outputPath += outDecoder.decode() // flush remaining bytes
       const finalPath = outputPath.trim()
       if (code === 0 && finalPath) {
         const codec = await probeVideoCodec(finalPath).catch(() => null)
@@ -161,11 +201,14 @@ function runDownloadOnce({ ytdlpPath, args, onProgress, downloadDir }) {
  * Download a platform video into `downloadDir` using yt-dlp. Creates the
  * directory if needed, builds the args, and retries once on transient failure.
  * Resolves with `{ filePath, fileName, downloadDir, codec }`.
+ *
+ * `ffmpegLocation` (optional): directory containing ffmpeg/ffprobe, forwarded to
+ * yt-dlp via --ffmpeg-location (see buildDownloadArgs).
  */
-async function downloadVideoWithYtdlp({ ytdlpPath, downloadDir, url, onProgress }) {
+async function downloadVideoWithYtdlp({ ytdlpPath, downloadDir, url, onProgress, ffmpegLocation }) {
   if (!fs.existsSync(downloadDir)) fs.mkdirSync(downloadDir, { recursive: true })
   const outputTemplate = path.join(downloadDir, '%(title)s.%(ext)s')
-  const args = buildDownloadArgs({ outputTemplate, url })
+  const args = buildDownloadArgs({ outputTemplate, url, ffmpegLocation })
 
   // Transient resets are common on platform/CDN connections. Retry with a
   // short backoff while keeping yt-dlp's own certificate validation intact.

@@ -1,8 +1,9 @@
 @echo off
 REM ============================================================
 REM  LinguaFlix Windows installer builder
-REM  Downloads bundled binaries (yt-dlp + ffmpeg), applies the
-REM  Windows fixes patch, and builds a self-contained installer
+REM  Downloads bundled binaries (yt-dlp + ffmpeg) and builds a
+REM  self-contained installer. Windows source fixes are already
+REM  integrated in the main branch.
 REM  + green (zip) package. No manual configuration needed.
 REM ============================================================
 setlocal
@@ -11,7 +12,7 @@ cd /d "%~dp0\.."
 set "BIN_DIR=resources\win-bin"
 
 REM ---------- 1. bundled binaries ----------
-echo [1/5] Preparing bundled binaries (yt-dlp + ffmpeg)...
+echo [1/4] Preparing bundled binaries (yt-dlp + ffmpeg)...
 if not exist "%BIN_DIR%" mkdir "%BIN_DIR%"
 
 if not exist "%BIN_DIR%\yt-dlp.exe" (
@@ -42,13 +43,8 @@ if not exist "%BIN_DIR%\ffmpeg.exe" (
 echo   [OK] binaries ready:
 dir /b "%BIN_DIR%"
 
-REM ---------- 2. apply fixes ----------
-echo [2/5] Applying Windows fixes...
-call windows-fixes\apply-windows-fixes.cmd
-if errorlevel 1 exit /b 1
-
-REM ---------- 3. npm install ----------
-echo [3/5] Installing dependencies...
+REM ---------- 2. npm install ----------
+echo [2/4] Installing dependencies...
 if not exist node_modules (
   call npm install --no-audit --no-fund
   if errorlevel 1 exit /b 1
@@ -56,13 +52,13 @@ if not exist node_modules (
   call npm rebuild esbuild electron protobufjs 2>nul
 )
 
-REM ---------- 4. build ----------
-echo [4/5] Building...
+REM ---------- 3. build ----------
+echo [3/4] Building...
 call npm run build
 if errorlevel 1 exit /b 1
 
-REM ---------- 5. package ----------
-echo [5/5] Packaging (nsis installer + zip green version)...
+REM ---------- 4. package ----------
+echo [4/4] Packaging (nsis installer + zip green version)...
 set "ELECTRON_BUILDER_BINARIES_MIRROR=https://npmmirror.com/mirrors/electron-builder-binaries/"
 set "ELECTRON_MIRROR=https://npmmirror.com/mirrors/electron/"
 call npx electron-builder --win nsis zip

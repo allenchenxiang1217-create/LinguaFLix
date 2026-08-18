@@ -28,8 +28,12 @@ const execFileAsync = util.promisify(child_process.execFile);
 const PORT = parseInt(process.env.PORT || process.argv.slice(2).find((_, i, a) => a[i - 1] === '--port') || '0', 10) || 5176;
 
 // ── Paths ──
-const USER_DATA_DIR = path.join(os.homedir(), 'Library', 'Application Support', 'LinguaFlix');
-const DOWNLOAD_DIR = path.join(os.homedir(), 'Movies', 'LinguaFlix');
+const USER_DATA_DIR = process.platform === 'win32'
+  ? path.join(process.env.APPDATA || path.join(os.homedir(), 'AppData', 'Roaming'), 'LinguaFlix')
+  : path.join(os.homedir(), 'Library', 'Application Support', 'LinguaFlix');
+const DOWNLOAD_DIR = process.platform === 'win32'
+  ? path.join(os.homedir(), 'Videos', 'LinguaFlix')
+  : path.join(os.homedir(), 'Movies', 'LinguaFlix');
 const SCREENSHOTS_DIR = path.join(USER_DATA_DIR, 'screenshots');
 const UPLOADS_DIR = path.join(USER_DATA_DIR, 'uploads');
 const BIN_DIR = path.join(USER_DATA_DIR, 'bin');
@@ -46,8 +50,13 @@ let cachedFfmpegPath = null;
 
 async function getFfmpegPath() {
   if (cachedFfmpegPath) return cachedFfmpegPath;
+  // Packaged app ships ffmpeg/ffprobe in resources/ (see electron-builder.yml).
+  const bundled = path.join(process.resourcesPath || '', 'ffmpeg.exe');
+  if (bundled && fs.existsSync(bundled)) { cachedFfmpegPath = bundled; return bundled; }
+  // `which` is macOS/Linux-only — Windows uses `where`.
+  const whichCmd = process.platform === 'win32' ? 'where' : 'which';
   try {
-    const { stdout } = await execFileAsync('which', ['ffmpeg'], { timeout: 5000 });
+    const { stdout } = await execFileAsync(whichCmd, ['ffmpeg'], { timeout: 5000 });
     const found = stdout.trim().split('\n')[0]?.trim();
     if (found && fs.existsSync(found)) { cachedFfmpegPath = found; return found; }
   } catch {}
@@ -78,8 +87,31 @@ function resolveLocalFilePath(p) {
     abs = abs.slice('/media'.length);
     try { abs = decodeURIComponent(abs); } catch {}
   }
-  if (!abs.startsWith('/')) abs = '/' + abs;
+  abs = normalizeLocalPath(abs);
   if (abs.split('/').includes('..')) return null;
+  return abs;
+}
+
+/**
+ * 把 /media URL 解码后的路径规范化为服务器可读的本地绝对路径。
+ *
+ * 渲染端 toMediaUrl 把本地路径逐段 encodeURIComponent 后拼成
+ *   /media/<encoded path>
+ * 例如 macOS: /media/Users/x/video.mp4 → /Users/x/video.mp4
+ *      Windows: C:\Users\x\video.mp4 → /media/C%3A/Users/x/video.mp4 → /C:/Users/x/video.mp4
+ *
+ * Windows 上的坑：`/C:/Users/...` 不是有效绝对路径（path.resolve 会把它当成
+ * `D:\C:\Users\...` 之类），fs.existsSync 永远 false → 视频 404。需要把
+ * `/C:/...` 的盘符前导斜杠去掉，还原成 `C:/Users/...`（Node 在 Windows 上
+ * 同时接受正斜杠）。
+ */
+function normalizeLocalPath(abs) {
+  if (!abs) return abs;
+  const m = abs.match(/^\/([a-zA-Z]):(\/|$)/);
+  if (m) {
+    return m[1] + ':' + m[2] + abs.slice(m[0].length);
+  }
+  if (!abs.startsWith('/')) return '/' + abs;
   return abs;
 }
 
@@ -473,11 +505,17 @@ async function resolveStreamUrl(urlStr, onProgress) {
 // the Electron main process uses. Edit there, not here.
 async function downloadVideo(urlStr, onProgress) {
   const ytdlpPath = await getYtDlpPath();
+  // If ffmpeg was found via `where`/`which`, pass its directory to yt-dlp so
+  // DASH video+audio merging works even when ffmpeg is not on PATH. ffprobe
+  // (codec probe) lives in the same bin dir.
+  const ffmpegExe = await getFfmpegPath().catch(() => null);
+  const ffmpegLocation = ffmpegExe ? path.dirname(ffmpegExe) : undefined;
   const result = await downloadVideoWithYtdlp({
     ytdlpPath,
     downloadDir: DOWNLOAD_DIR,
     url: urlStr,
     onProgress,
+    ffmpegLocation,
   });
   return { success: true, ...result };
 }
@@ -577,8 +615,17 @@ async function handleRequest(req, res) {
     if (req.method === 'GET' && pathname.startsWith('/media/')) {
       // decodeURIComponent pairs with the client's per-segment encodeURIComponent in
       // toMediaUrl, so filenames with '#', '?', '%', spaces or non-ASCII round-trip.
-      const filePath = decodeURIComponent(pathname.replace(/^\/media/, ''));
-      const absPath = filePath.startsWith('/') ? filePath : path.join('/', filePath);
+      let filePath = decodeURIComponent(pathname.replace(/^\/media/, ''));
+      // Windows: `/C:/Users/...` is not a valid absolute path — and path.join('/',
+      // 'C:/...') would produce '\C:\...' which is ALSO invalid. Strip the leading
+      // slash in front of the drive letter and use the drive path as-is, so
+      // `C:/Users/...` resolves on Windows while macOS `/Users/...` stays untouched.
+      const driveMatch = filePath.match(/^\/([a-zA-Z]):(\/|$)/);
+      const isDrivePath = !!driveMatch;
+      if (driveMatch) {
+        filePath = driveMatch[1] + ':' + driveMatch[2] + filePath.slice(driveMatch[0].length);
+      }
+      const absPath = isDrivePath ? filePath : (filePath.startsWith('/') ? filePath : path.join('/', filePath));
 
       // Reject path traversal ('..' anywhere in the decoded path)
       if (absPath.split('/').includes('..')) {

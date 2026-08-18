@@ -386,7 +386,13 @@ export async function downloadVideo(
   const ytdlpPath = await YtDlpManager.getPath()
   // Use macOS Videos folder / LinguaFlix subfolder
   const downloadDir = join(app.getPath('videos'), 'LinguaFlix')
-  const { filePath } = await downloadVideoWithYtdlp({ ytdlpPath, downloadDir, url, onProgress })
+  // Packaged app ships ffmpeg/ffprobe in resources/ (see electron-builder.yml)
+  // so DASH video+audio merging works out of the box. In dev, ffmpeg is picked
+  // up from PATH by yt-dlp itself, so no location is passed.
+  const ffmpegLocation = app.isPackaged
+    ? process.resourcesPath
+    : undefined
+  const { filePath } = await downloadVideoWithYtdlp({ ytdlpPath, downloadDir, url, onProgress, ffmpegLocation })
   return filePath
 }
 

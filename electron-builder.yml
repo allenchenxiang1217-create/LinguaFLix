@@ -36,10 +36,22 @@ win:
   artifactName: LinguaFlix-${version}-win.${ext}
   target:
     - nsis
-    - portable
+    - zip
+  # Bundled Windows binaries — yt-dlp (video download) + ffmpeg/ffprobe (DASH
+  # merging & auto-clip). Users get a fully self-contained install: no need to
+  # install or configure anything. Windows-only, so mac/linux builds are
+  # unaffected (resources/win-bin exists only on this machine's checkout).
+  extraResources:
+    - from: resources/win-bin/yt-dlp.exe
+      to: yt-dlp.exe
+    - from: resources/win-bin/ffmpeg.exe
+      to: ffmpeg.exe
+    - from: resources/win-bin/ffprobe.exe
+      to: ffprobe.exe
 nsis:
   oneClick: false
   allowToChangeInstallationDirectory: true
+  artifactName: LinguaFlix-${version}-win-setup.${ext}
 linux:
   artifactName: LinguaFlix-${version}-linux.${ext}
   target:

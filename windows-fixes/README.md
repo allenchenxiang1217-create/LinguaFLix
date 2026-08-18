@@ -1,7 +1,7 @@
 # LinguaFlix Windows 修复补丁
 
-本目录包含 **Windows 专属的修复**，以补丁形式提供，**不修改仓库源代码**
-（源代码保持 Mac 开发环境原状）。
+本目录包含 Windows 专属的启动与打包工具。Windows 运行修复已经合并到主分支，
+不再需要手动应用补丁。
 
 ## 背景
 
@@ -28,14 +28,7 @@
 
 ## 使用方法（Windows）
 
-### 只应用代码修复
-
-```bat
-cd LinguaFLix
-windows-fixes\apply-windows-fixes.cmd
-```
-
-### 应用修复并构建完整安装包（推荐）
+### 构建完整安装包（推荐）
 
 ```bat
 cd LinguaFLix
@@ -46,10 +39,9 @@ windows-fixes\build-windows-installer.cmd
 1. 下载 yt-dlp.exe（npmmirror 镜像）
 2. 下载 ffmpeg essentials（gyan.dev，约 106MB）
 3. 放入 `resources/win-bin/`
-4. 应用 `windows-fixes.patch`
-5. `npm install`（若 node_modules 不存在）
-6. `npm run build`
-7. `npx electron-builder --win nsis zip`
+4. `npm install`（若 node_modules 不存在）
+5. `npm run build`
+6. `npx electron-builder --win nsis zip`
 
 产物在 `release/`：
 - `LinguaFlix-<version>-win-setup.exe` — 安装版
@@ -57,7 +49,6 @@ windows-fixes\build-windows-installer.cmd
 
 ## 注意事项
 
-- 补丁基于仓库当前 HEAD 生成；如果上游代码有更新，`git apply` 可能冲突，
-  此时手动合并即可（改动都很小且独立）。
+- `windows-fixes.patch` 仅作为历史变更记录保留，不要重复应用。
 - `resources/win-bin/` 已被 .gitignore 排除（二进制太大不适合进 git）。
 - Mac/Linux 构建不受影响：win-bin 的 extraResources 只在 `win:` 段声明。

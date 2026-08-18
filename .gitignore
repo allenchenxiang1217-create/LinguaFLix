@@ -25,3 +25,7 @@ server/.port
 
 # Dictionary build cache (63MB CSV source; built resources/ecdict.db is tracked)
 scripts/.cache/
+
+# Windows bundled binaries (yt-dlp/ffmpeg/ffprobe) — too large for git; fetched
+# by the windows-fixes packaging script into resources/win-bin before building.
+resources/win-bin/

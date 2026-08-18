@@ -80,8 +80,20 @@ export function startMediaServer(): void {
       return
     }
 
-    // URL format: /media/Users/x/video.mp4 (absolute path after /media/)
-    let filePath = decodeURI(url.pathname.replace(/^\/media/, ''))
+    // URL format: /media/<encoded absolute path> — renderer's toMediaUrl
+    // percent-encodes each path segment (encodeURIComponent), so filenames with
+    // '#', '?', '%', spaces or non-ASCII round-trip. decodeURIComponent pairs
+    // with that encoding (decodeURI alone would leave %3A etc. untouched).
+    let filePath = decodeURIComponent(url.pathname.replace(/^\/media/, ''))
+
+    // Windows: `/C:/Users/...` is not a valid absolute path — fs.existsSync
+    // would always be false, so the video 404s. Strip the leading slash in front
+    // of the drive letter to get `C:/Users/...` (Node accepts forward slashes
+    // on Windows). macOS `/Users/...` is untouched.
+    const driveMatch = filePath.match(/^\/([a-zA-Z]):(\/|$)/)
+    if (driveMatch) {
+      filePath = driveMatch[1] + ':' + driveMatch[2] + filePath.slice(driveMatch[0].length)
+    }
 
     if (!filePath) {
       res.writeHead(400)
