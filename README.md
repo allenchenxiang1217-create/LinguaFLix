@@ -82,6 +82,40 @@ npm run dev:web
 
 此时需要确保后端已经在 `127.0.0.1:5176` 运行。
 
+## Windows 使用说明（仅 Windows）
+
+> 以下说明仅适用于 **Windows** 用户。macOS / Linux 用户请参照上面的「快速开始」。
+
+### 获取安装包
+
+在 [GitHub Releases](https://github.com/allenchenxiang1217-create/LinguaFLix/releases) 下载：
+
+- **`LinguaFlix-<version>-win.zip`** —— 绿色版，**解压即用**（推荐）
+- **`LinguaFlix-<version>-win-setup.exe`** —— 安装版
+
+两个版本都已内置 yt-dlp / FFmpeg / 离线词典，**无需安装任何依赖或配置**。
+
+### 打开步骤（绿色版）
+
+1. 把 `LinguaFlix-<version>-win.zip` **解压**到任意文件夹（必须解压，不能直接在压缩包内双击）。
+2. 进入解压后的文件夹，找到 **`LinguaFlix.exe`**（蓝色狐狸图标）并**双击**启动。
+3. 若 Windows 弹出安全警告，点「更多信息」→「仍要运行」（内测版未签名，属正常提示）。
+4. 其余文件（`resources/`、`locales/`、`.dll`、`.pak` 等）都是运行必需的，请勿移动或删除。
+
+### Windows 专属修复补丁
+
+Windows 运行时修复以独立补丁形式提供（**不修改源代码**，Mac 开发环境不受影响），位于仓库 `windows-fixes/` 目录：
+
+```bash
+# 应用修复到工作区
+windows-fixes\apply-windows-fixes.cmd
+
+# 或一键下载内置二进制 + 应用补丁 + 构建安装包
+windows-fixes\build-windows-installer.cmd
+```
+
+覆盖的修复：yt-dlp GBK 文件名解码、Windows 盘符路径（`/C:/...` → `C:/...`）、`where` 命令适配、内置二进制查找、打包 artifact 命名冲突等。详见 [windows-fixes/README.md](windows-fixes/README.md)。
+
 ## 构建与发布
 
 先运行类型检查和 Electron 构建：
