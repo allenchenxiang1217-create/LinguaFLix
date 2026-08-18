@@ -1,0 +1,336 @@
+diff --git a/.gitignore b/.gitignore
+index 2ca2877..ddb7e92 100644
+--- a/.gitignore
++++ b/.gitignore
+@@ -25,3 +25,7 @@ server/.port
+ 
+ # Dictionary build cache (63MB CSV source; built resources/ecdict.db is tracked)
+ scripts/.cache/
++
++# Windows bundled binaries (yt-dlp/ffmpeg/ffprobe) — too large for git; fetched
++# by the windows-fixes packaging script into resources/win-bin before building.
++resources/win-bin/
+diff --git a/electron-builder.yml b/electron-builder.yml
+index ddcbf3e..3204084 100644
+--- a/electron-builder.yml
++++ b/electron-builder.yml
+@@ -36,10 +36,22 @@ win:
+   artifactName: LinguaFlix-${version}-win.${ext}
+   target:
+     - nsis
+-    - portable
++    - zip
++  # Bundled Windows binaries — yt-dlp (video download) + ffmpeg/ffprobe (DASH
++  # merging & auto-clip). Users get a fully self-contained install: no need to
++  # install or configure anything. Windows-only, so mac/linux builds are
++  # unaffected (resources/win-bin exists only on this machine's checkout).
++  extraResources:
++    - from: resources/win-bin/yt-dlp.exe
++      to: yt-dlp.exe
++    - from: resources/win-bin/ffmpeg.exe
++      to: ffmpeg.exe
++    - from: resources/win-bin/ffprobe.exe
++      to: ffprobe.exe
+ nsis:
+   oneClick: false
+   allowToChangeInstallationDirectory: true
++  artifactName: LinguaFlix-${version}-win-setup.${ext}
+ linux:
+   artifactName: LinguaFlix-${version}-linux.${ext}
+   target:
+diff --git a/package.json b/package.json
+index 15f21c2..b6467e4 100644
+--- a/package.json
++++ b/package.json
+@@ -36,5 +36,11 @@
+     "tailwindcss": "^4.3.3",
+     "typescript": "^5.9.3",
+     "zustand": "^5.0.14"
++  },
++  "allowScripts": {
++    "electron-winstaller@5.4.0": true,
++    "esbuild@0.25.12": true,
++    "esbuild@0.28.2": true,
++    "protobufjs@7.6.5": true
+   }
+ }
+diff --git a/server/index.js b/server/index.js
+index cd22a03..2832ce3 100644
+--- a/server/index.js
++++ b/server/index.js
+@@ -46,8 +46,13 @@ let cachedFfmpegPath = null;
+ 
+ async function getFfmpegPath() {
+   if (cachedFfmpegPath) return cachedFfmpegPath;
++  // Packaged app ships ffmpeg/ffprobe in resources/ (see electron-builder.yml).
++  const bundled = path.join(process.resourcesPath || '', 'ffmpeg.exe');
++  if (bundled && fs.existsSync(bundled)) { cachedFfmpegPath = bundled; return bundled; }
++  // `which` is macOS/Linux-only — Windows uses `where`.
++  const whichCmd = process.platform === 'win32' ? 'where' : 'which';
+   try {
+-    const { stdout } = await execFileAsync('which', ['ffmpeg'], { timeout: 5000 });
++    const { stdout } = await execFileAsync(whichCmd, ['ffmpeg'], { timeout: 5000 });
+     const found = stdout.trim().split('\n')[0]?.trim();
+     if (found && fs.existsSync(found)) { cachedFfmpegPath = found; return found; }
+   } catch {}
+@@ -78,11 +83,34 @@ function resolveLocalFilePath(p) {
+     abs = abs.slice('/media'.length);
+     try { abs = decodeURIComponent(abs); } catch {}
+   }
+-  if (!abs.startsWith('/')) abs = '/' + abs;
++  abs = normalizeLocalPath(abs);
+   if (abs.split('/').includes('..')) return null;
+   return abs;
+ }
+ 
++/**
++ * 把 /media URL 解码后的路径规范化为服务器可读的本地绝对路径。
++ *
++ * 渲染端 toMediaUrl 把本地路径逐段 encodeURIComponent 后拼成
++ *   /media/<encoded path>
++ * 例如 macOS: /media/Users/x/video.mp4 → /Users/x/video.mp4
++ *      Windows: C:\Users\x\video.mp4 → /media/C%3A/Users/x/video.mp4 → /C:/Users/x/video.mp4
++ *
++ * Windows 上的坑：`/C:/Users/...` 不是有效绝对路径（path.resolve 会把它当成
++ * `D:\C:\Users\...` 之类），fs.existsSync 永远 false → 视频 404。需要把
++ * `/C:/...` 的盘符前导斜杠去掉，还原成 `C:/Users/...`（Node 在 Windows 上
++ * 同时接受正斜杠）。
++ */
++function normalizeLocalPath(abs) {
++  if (!abs) return abs;
++  const m = abs.match(/^\/([a-zA-Z]):(\/|$)/);
++  if (m) {
++    return m[1] + ':' + m[2] + abs.slice(m[0].length);
++  }
++  if (!abs.startsWith('/')) return '/' + abs;
++  return abs;
++}
++
+ /** 带并发上限的异步 map（用于并行抽取片段）。 */
+ async function mapLimit(items, limit, fn) {
+   const results = new Array(items.length);
+@@ -473,11 +501,17 @@ async function resolveStreamUrl(urlStr, onProgress) {
+ // the Electron main process uses. Edit there, not here.
+ async function downloadVideo(urlStr, onProgress) {
+   const ytdlpPath = await getYtDlpPath();
++  // If ffmpeg was found via `where`/`which`, pass its directory to yt-dlp so
++  // DASH video+audio merging works even when ffmpeg is not on PATH. ffprobe
++  // (codec probe) lives in the same bin dir.
++  const ffmpegExe = await getFfmpegPath().catch(() => null);
++  const ffmpegLocation = ffmpegExe ? path.dirname(ffmpegExe) : undefined;
+   const result = await downloadVideoWithYtdlp({
+     ytdlpPath,
+     downloadDir: DOWNLOAD_DIR,
+     url: urlStr,
+     onProgress,
++    ffmpegLocation,
+   });
+   return { success: true, ...result };
+ }
+@@ -577,8 +611,17 @@ async function handleRequest(req, res) {
+     if (req.method === 'GET' && pathname.startsWith('/media/')) {
+       // decodeURIComponent pairs with the client's per-segment encodeURIComponent in
+       // toMediaUrl, so filenames with '#', '?', '%', spaces or non-ASCII round-trip.
+-      const filePath = decodeURIComponent(pathname.replace(/^\/media/, ''));
+-      const absPath = filePath.startsWith('/') ? filePath : path.join('/', filePath);
++      let filePath = decodeURIComponent(pathname.replace(/^\/media/, ''));
++      // Windows: `/C:/Users/...` is not a valid absolute path — and path.join('/',
++      // 'C:/...') would produce '\C:\...' which is ALSO invalid. Strip the leading
++      // slash in front of the drive letter and use the drive path as-is, so
++      // `C:/Users/...` resolves on Windows while macOS `/Users/...` stays untouched.
++      const driveMatch = filePath.match(/^\/([a-zA-Z]):(\/|$)/);
++      const isDrivePath = !!driveMatch;
++      if (driveMatch) {
++        filePath = driveMatch[1] + ':' + driveMatch[2] + filePath.slice(driveMatch[0].length);
++      }
++      const absPath = isDrivePath ? filePath : (filePath.startsWith('/') ? filePath : path.join('/', filePath));
+ 
+       // Reject path traversal ('..' anywhere in the decoded path)
+       if (absPath.split('/').includes('..')) {
+diff --git a/shared/downloader.cjs b/shared/downloader.cjs
+index 4e363e1..ea47512 100644
+--- a/shared/downloader.cjs
++++ b/shared/downloader.cjs
+@@ -23,6 +23,26 @@ const child_process = require('child_process')
+ const path = require('path')
+ const fs = require('fs')
+ 
++// ── Windows stdout encoding ──
++// On a Chinese/Japanese Windows system, Python (and therefore the PyInstaller-
++// packaged yt-dlp.exe) writes non-ASCII paths to stdout in the console code page
++// (GBK/cp936), NOT UTF-8. Node's Buffer#toString() decodes as UTF-8, which mangles
++// every CJK filename → the API returns a mojibake path → the renderer 404s on
++// /media/<mojibake>. TextDecoder('gbk') is streaming and handles multi-byte
++// characters split across data chunks (unlike StringDecoder, which only supports
++// utf8/utf16le/latin1/base64/hex).
++function createStdoutDecoder() {
++  if (process.platform === 'win32') {
++    try {
++      return new TextDecoder('gbk')
++    } catch {
++      // Fall back to UTF-8 if full-icu isn't available.
++      return null
++    }
++  }
++  return null
++}
++
+ // ── Format forcing ──
+ 
+ // FORCE H.264 (avc1) video + AAC (mp4a) audio in an mp4 container — the combo
+@@ -54,9 +74,15 @@ const STABILITY_ARGS = [
+ /**
+  * Build the full yt-dlp argument list for a download. Split out so callers can
+  * inspect/override args if they ever need a special case.
++ *
++ * `ffmpegLocation` (optional): directory containing ffmpeg/ffprobe. Passed to
++ * yt-dlp via --ffmpeg-location so a packaged app's bundled ffmpeg is used even
++ * when nothing is on PATH — without it, yt-dlp would fail to merge DASH
++ * video+audio streams ("ERROR: You have requested merging of multiple formats
++ * but ffmpeg is not installed").
+  */
+-function buildDownloadArgs({ outputTemplate, url }) {
+-  return [
++function buildDownloadArgs({ outputTemplate, url, ffmpegLocation }) {
++  const args = [
+     '-f', FORMAT_SELECTOR,
+     ...STABILITY_ARGS,
+     '--merge-output-format', 'mp4',
+@@ -66,6 +92,10 @@ function buildDownloadArgs({ outputTemplate, url }) {
+     '--print', 'after_move:filepath',
+     url,
+   ]
++  if (ffmpegLocation) {
++    args.splice(7, 0, '--ffmpeg-location', ffmpegLocation)
++  }
++  return args
+ }
+ 
+ // ── Codec probe ──
+@@ -102,6 +132,9 @@ function runDownloadOnce({ ytdlpPath, args, onProgress, downloadDir }) {
+     let lastPercent = 0
+     let outputPath = ''
+     const stderrTail = []
++    // Decode yt-dlp's stdout with the correct code page on Windows (GBK for
++    // CJK locales) so file paths with non-ASCII characters survive intact.
++    const outDecoder = createStdoutDecoder()
+ 
+     proc.stderr.on('data', (data) => {
+       const text = data.toString()
+@@ -126,9 +159,16 @@ function runDownloadOnce({ ytdlpPath, args, onProgress, downloadDir }) {
+       }
+     })
+ 
+-    proc.stdout.on('data', (data) => { outputPath += data.toString() })
++    proc.stdout.on('data', (data) => {
++      if (outDecoder) {
++        outputPath += outDecoder.decode(data, { stream: true })
++      } else {
++        outputPath += data.toString()
++      }
++    })
+ 
+     proc.on('close', async (code) => {
++      if (outDecoder) outputPath += outDecoder.decode() // flush remaining bytes
+       const finalPath = outputPath.trim()
+       if (code === 0 && finalPath) {
+         const codec = await probeVideoCodec(finalPath).catch(() => null)
+@@ -161,11 +201,14 @@ function runDownloadOnce({ ytdlpPath, args, onProgress, downloadDir }) {
+  * Download a platform video into `downloadDir` using yt-dlp. Creates the
+  * directory if needed, builds the args, and retries once on transient failure.
+  * Resolves with `{ filePath, fileName, downloadDir, codec }`.
++ *
++ * `ffmpegLocation` (optional): directory containing ffmpeg/ffprobe, forwarded to
++ * yt-dlp via --ffmpeg-location (see buildDownloadArgs).
+  */
+-async function downloadVideoWithYtdlp({ ytdlpPath, downloadDir, url, onProgress }) {
++async function downloadVideoWithYtdlp({ ytdlpPath, downloadDir, url, onProgress, ffmpegLocation }) {
+   if (!fs.existsSync(downloadDir)) fs.mkdirSync(downloadDir, { recursive: true })
+   const outputTemplate = path.join(downloadDir, '%(title)s.%(ext)s')
+-  const args = buildDownloadArgs({ outputTemplate, url })
++  const args = buildDownloadArgs({ outputTemplate, url, ffmpegLocation })
+ 
+   // Transient resets are common on platform/CDN connections. Retry with a
+   // short backoff while keeping yt-dlp's own certificate validation intact.
+diff --git a/src/main/ipc-handlers.ts b/src/main/ipc-handlers.ts
+index c3ad0b2..92f2ed7 100644
+--- a/src/main/ipc-handlers.ts
++++ b/src/main/ipc-handlers.ts
+@@ -230,8 +230,8 @@ export function registerIpcHandlers(): void {
+         event.sender.send('stream:download-progress', progress)
+       })
+ 
+-      // Extract just the file name for display
+-      const fileName = filePath.split('/').pop() || filePath
++      // Extract just the file name for display (handle Windows backslash paths)
++      const fileName = basename(filePath)
+ 
+       return {
+         success: true,
+diff --git a/src/main/media-server.ts b/src/main/media-server.ts
+index 820b748..f33a16d 100644
+--- a/src/main/media-server.ts
++++ b/src/main/media-server.ts
+@@ -80,8 +80,20 @@ export function startMediaServer(): void {
+       return
+     }
+ 
+-    // URL format: /media/Users/x/video.mp4 (absolute path after /media/)
+-    let filePath = decodeURI(url.pathname.replace(/^\/media/, ''))
++    // URL format: /media/<encoded absolute path> — renderer's toMediaUrl
++    // percent-encodes each path segment (encodeURIComponent), so filenames with
++    // '#', '?', '%', spaces or non-ASCII round-trip. decodeURIComponent pairs
++    // with that encoding (decodeURI alone would leave %3A etc. untouched).
++    let filePath = decodeURIComponent(url.pathname.replace(/^\/media/, ''))
++
++    // Windows: `/C:/Users/...` is not a valid absolute path — fs.existsSync
++    // would always be false, so the video 404s. Strip the leading slash in front
++    // of the drive letter to get `C:/Users/...` (Node accepts forward slashes
++    // on Windows). macOS `/Users/...` is untouched.
++    const driveMatch = filePath.match(/^\/([a-zA-Z]):(\/|$)/)
++    if (driveMatch) {
++      filePath = driveMatch[1] + ':' + driveMatch[2] + filePath.slice(driveMatch[0].length)
++    }
+ 
+     if (!filePath) {
+       res.writeHead(400)
+diff --git a/src/main/stream-resolver.ts b/src/main/stream-resolver.ts
+index 7fe311c..9ddb4f4 100644
+--- a/src/main/stream-resolver.ts
++++ b/src/main/stream-resolver.ts
+@@ -386,7 +386,13 @@ export async function downloadVideo(
+   const ytdlpPath = await YtDlpManager.getPath()
+   // Use macOS Videos folder / LinguaFlix subfolder
+   const downloadDir = join(app.getPath('videos'), 'LinguaFlix')
+-  const { filePath } = await downloadVideoWithYtdlp({ ytdlpPath, downloadDir, url, onProgress })
++  // Packaged app ships ffmpeg/ffprobe in resources/ (see electron-builder.yml)
++  // so DASH video+audio merging works out of the box. In dev, ffmpeg is picked
++  // up from PATH by yt-dlp itself, so no location is passed.
++  const ffmpegLocation = app.isPackaged
++    ? process.resourcesPath
++    : undefined
++  const { filePath } = await downloadVideoWithYtdlp({ ytdlpPath, downloadDir, url, onProgress, ffmpegLocation })
+   return filePath
+ }
+ 
+diff --git a/src/main/ytdlp-manager.ts b/src/main/ytdlp-manager.ts
+index 7e954c0..34bc2e6 100644
+--- a/src/main/ytdlp-manager.ts
++++ b/src/main/ytdlp-manager.ts
+@@ -171,6 +171,16 @@ export const YtDlpManager = {
+   async getPath(): Promise<string> {
+     if (cachedPath) return cachedPath
+ 
++    // 0. Bundled binary (packaged app ships yt-dlp.exe in resources/ so users
++    //    never need to install or download anything).
++    const bundledPath = join(process.resourcesPath, 'yt-dlp.exe')
++    if (app.isPackaged && existsSync(bundledPath)) {
++      cachedPath = bundledPath
++      availabilityChecked = true
++      availabilityResult = true
++      return cachedPath
++    }
++
+     // 1. Check system PATH
+     const inPath = await findInPath()
+     if (inPath) {
