@@ -16,7 +16,12 @@ import { app } from 'electron'
 import { join } from 'path'
 import { existsSync, mkdirSync } from 'fs'
 import { YtDlpManager } from './ytdlp-manager'
-import { downloadVideoWithYtdlp, type DownloadProgress } from '../../shared/downloader.cjs'
+import {
+  downloadVideoWithYtdlp,
+  buildPlatformArgs,
+  buildPlatformEnv,
+  type DownloadProgress,
+} from '../../shared/downloader.cjs'
 
 const execFileAsync = promisify(execFile)
 
@@ -208,11 +213,15 @@ export async function resolveStreamUrl(
     '--socket-timeout', '10',
     url,
   ]
+  // JS runtime (node) for the YouTube extractor — required by recent yt-dlp.
+  const platformArgs = buildPlatformArgs()
+  if (platformArgs.length) args.unshift(...platformArgs)
 
   try {
     const { stdout } = await execFileAsync(ytdlpPath, args, {
       timeout: RESOLUTION_TIMEOUT,
       maxBuffer: 5 * 1024 * 1024, // 5MB (reduced from 10MB thanks to format pre-selection)
+      env: buildPlatformEnv() ? { ...process.env, ...buildPlatformEnv() } : undefined,
     })
 
     const info: YtDlpJsonOutput = JSON.parse(stdout.trim())

@@ -43,9 +43,99 @@ function createStdoutDecoder() {
   return null
 }
 
-// ── Format forcing ──
+// ── Windows system proxy + JS runtime detection ──
+// yt-dlp (a Python process) does NOT read the Windows system proxy settings by
+// itself, and the newer YouTube extractor needs a JS runtime (node/deno) to
+// parse the player. Without these, "paste a YouTube link" fails on machines
+// that browse YouTube fine through a VPN/system proxy. Detection is best-effort
+// and only active on Windows / when the binary is actually found, so machines
+// that work today keep working identically.
 
-// FORCE H.264 (avc1) video + AAC (mp4a) audio in an mp4 container — the combo
+let cachedProxy = null
+let cachedJsRuntime = null
+
+/** Read the Windows system proxy (HKCU Internet Settings). Returns http URL or null. */
+function getWindowsProxy() {
+  if (process.platform !== 'win32') return cachedProxy || null
+  if (cachedProxy !== null) return cachedProxy || null
+  try {
+    const { execFileSync } = require('child_process')
+    // ProxyEnable = 0x1 means the system proxy is on.
+    const enableOut = execFileSync('reg', ['query', 'HKCU\\Software\\Microsoft\\Windows\\CurrentVersion\\Internet Settings', '/v', 'ProxyEnable'], { encoding: 'utf8', timeout: 3000 })
+    if (!/0x1/.test(enableOut)) { cachedProxy = ''; return null }
+    const serverOut = execFileSync('reg', ['query', 'HKCU\\Software\\Microsoft\\Windows\\CurrentVersion\\Internet Settings', '/v', 'ProxyServer'], { encoding: 'utf8', timeout: 3000 })
+    const m = serverOut.match(/ProxyServer\s+REG_SZ\s+(\S+)/)
+    if (!m || !m[1]) { cachedProxy = ''; return null }
+    let proxy = m[1].trim()
+    // A "http=127.0.0.1:7890;https=127.0.0.1:7890" scheme list → take the http entry.
+    if (proxy.includes('=')) {
+      const httpEntry = proxy.split(';').find((e) => e.startsWith('http='))
+      proxy = httpEntry ? httpEntry.split('=')[1] : proxy.split('=')[1]
+    }
+    if (!proxy.includes('://')) proxy = 'http://' + proxy
+    cachedProxy = proxy
+    return proxy
+  } catch {
+    cachedProxy = ''
+    return null
+  }
+}
+
+/**
+ * Find a usable JS runtime for yt-dlp's YouTube extractor (node preferred).
+ * Returns "runtime:/path" (yt-dlp --js-runtimes format) or null.
+ */
+function findJsRuntime() {
+  if (cachedJsRuntime !== null) return cachedJsRuntime || null
+  const candidates = []
+  // Common Windows install locations + PATH lookup.
+  if (process.env.NODE) candidates.push(process.env.NODE)
+  const { execFileSync } = require('child_process')
+  try {
+    const out = execFileSync('where', ['node'], { encoding: 'utf8', timeout: 3000 })
+    const first = out.trim().split(/\r?\n/)[0]
+    if (first) candidates.push(first)
+  } catch { /* not on PATH */ }
+  candidates.push(
+    'C:\\Program Files\\nodejs\\node.exe',
+    'C:\\nodejs\\node.exe',
+    'D:\\node.exe',
+    '/usr/local/bin/node',
+    '/opt/homebrew/bin/node',
+  )
+  const fs2 = require('fs')
+  for (const c of candidates) {
+    if (c && fs2.existsSync(c)) { cachedJsRuntime = 'node:' + c; return cachedJsRuntime }
+  }
+  cachedJsRuntime = ''
+  return null
+}
+
+/** Extra yt-dlp args that make platform downloads work on a proxied Windows box. */
+function buildPlatformArgs() {
+  const args = []
+  const js = findJsRuntime()
+  if (js) args.push('--js-runtimes', js)
+  // YouTube: the default android_vr client returns HTTP 403 when downloading
+  // the video stream through many proxies/VPNs, and the web client only serves
+  // storyboard images for some videos. The plain `android` client downloads
+  // both reliably. Scoped to youtube, so other platforms are unaffected.
+  args.push('--extractor-args', 'youtube:player_client=android')
+  return args
+}
+
+/** Environment overrides for the yt-dlp child process (proxy via HTTP(S)_PROXY). */
+function buildPlatformEnv() {
+  const proxy = getWindowsProxy()
+  if (!proxy) return undefined
+  return {
+    HTTP_PROXY: proxy,
+    HTTPS_PROXY: proxy,
+    NO_PROXY: 'localhost,127.0.0.1,::1,.bilibili.com,.bilivideo.com,.b23.tv,.hdslb.com,.mcdn.bilivideo.cn,.biliapi.net',
+  }
+}
+
+// ── Format forcing ──// FORCE H.264 (avc1) video + AAC (mp4a) audio in an mp4 container — the combo
 // every browser/player decodes. yt-dlp's default sort ranks AV1 above h264, so
 // without this you download files that can't be decoded → "Video failed to
 // load". The fallback chain degrades to "any H.264 mp4" then "anything" for
@@ -95,6 +185,12 @@ function buildDownloadArgs({ outputTemplate, url, ffmpegLocation }) {
   if (ffmpegLocation) {
     args.unshift('--ffmpeg-location', ffmpegLocation)
   }
+  // JS runtime for the YouTube extractor (node/deno) — required by recent
+  // yt-dlp; harmless on other platforms.
+  const platformArgs = buildPlatformArgs()
+  if (platformArgs.length) {
+    args.unshift(...platformArgs)
+  }
   return args
 }
 
@@ -128,16 +224,26 @@ function probeVideoCodec(filePath) {
 function runDownloadOnce({ ytdlpPath, args, onProgress, downloadDir }) {
   return new Promise((resolve, reject) => {
     onProgress({ percent: 0, speed: '', eta: '', status: 'starting' })
-    const proc = child_process.spawn(ytdlpPath, args, { stdio: ['ignore', 'pipe', 'pipe'] })
+    const proc = child_process.spawn(ytdlpPath, args, {
+      stdio: ['ignore', 'pipe', 'pipe'],
+      env: buildPlatformEnv() ? { ...process.env, ...buildPlatformEnv() } : undefined,
+    })
     let lastPercent = 0
     let outputPath = ''
     const stderrTail = []
     // Decode yt-dlp's stdout with the correct code page on Windows (GBK for
     // CJK locales) so file paths with non-ASCII characters survive intact.
     const outDecoder = createStdoutDecoder()
+    // stderr needs its OWN decoder — TextDecoder is stateful (multi-byte chars
+    // can span chunks), so sharing one between stdout and stderr would corrupt
+    // both streams' output.
+    const errDecoder = createStdoutDecoder()
 
     proc.stderr.on('data', (data) => {
-      const text = data.toString()
+      // stderr is also code-page encoded on Windows (GBK for CJK locales) —
+      // decode it with a dedicated streaming decoder so error messages are
+      // readable instead of mojibake (e.g. "python" -> "турусс").
+      const text = errDecoder ? errDecoder.decode(data, { stream: true }) : data.toString()
       // Keep a bounded tail of yt-dlp's own error output for useful failure messages.
       for (const line of text.split('\n')) {
         const t = line.trim()
@@ -233,4 +339,8 @@ module.exports = {
   probeVideoCodec,
   runDownloadOnce,
   downloadVideoWithYtdlp,
+  getWindowsProxy,
+  findJsRuntime,
+  buildPlatformArgs,
+  buildPlatformEnv,
 }

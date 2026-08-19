@@ -20,7 +20,7 @@ const crypto = require('crypto');
 const stream = require('stream');
 const util = require('util');
 const child_process = require('child_process');
-const { downloadVideoWithYtdlp } = require('../shared/downloader.cjs');
+const { downloadVideoWithYtdlp, buildPlatformArgs, buildPlatformEnv } = require('../shared/downloader.cjs');
 
 const pipelineAsync = util.promisify(stream.pipeline);
 const execFileAsync = util.promisify(child_process.execFile);
@@ -435,9 +435,17 @@ async function resolveStreamUrl(urlStr, onProgress) {
 
   const ytdlpPath = await getYtDlpPath();
   const args = ['--dump-json', '-f', RESOLUTION_FORMAT, '--no-playlist', '--no-check-formats', '--extractor-retries', '1', '--socket-timeout', '10', urlStr];
+  // JS runtime (node) for the YouTube extractor + Windows system proxy — see
+  // shared/downloader.cjs. Without these, YouTube links fail on proxied boxes.
+  const platformArgs = buildPlatformArgs();
+  if (platformArgs.length) args.unshift(...platformArgs);
 
   try {
-    const { stdout } = await execFileAsync(ytdlpPath, args, { timeout: RESOLUTION_TIMEOUT, maxBuffer: 5 * 1024 * 1024 });
+    const { stdout } = await execFileAsync(ytdlpPath, args, {
+      timeout: RESOLUTION_TIMEOUT,
+      maxBuffer: 5 * 1024 * 1024,
+      env: buildPlatformEnv() ? { ...process.env, ...buildPlatformEnv() } : undefined,
+    });
     const info = JSON.parse(stdout.trim());
     const title = info.fulltitle || info.title || 'Unknown';
     const requestedFormats = info.requested_formats;
