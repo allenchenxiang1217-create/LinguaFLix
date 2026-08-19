@@ -102,19 +102,25 @@ npm run dev:web
 3. 若 Windows 弹出安全警告，点「更多信息」→「仍要运行」（内测版未签名，属正常提示）。
 4. 其余文件（`resources/`、`locales/`、`.dll`、`.pak` 等）都是运行必需的，请勿移动或删除。
 
-### Windows 专属修复补丁
+### Windows 平台适配说明
 
-Windows 运行时修复以独立补丁形式提供（**不修改源代码**，Mac 开发环境不受影响），位于仓库 `windows-fixes/` 目录：
+Windows 运行时的平台适配已**合并到源代码**（Mac 开发环境同样受益），包括：
 
-```bash
-# 应用修复到工作区
-windows-fixes\apply-windows-fixes.cmd
+- **yt-dlp 中文文件名**：GBK 输出解码（stdout + stderr），避免中文乱码导致播放失败
+- **Windows 盘符路径**：`/C:/...` → `C:/...` 规范化，修复本地视频 404
+- **YouTube 下载**：自动读取系统代理（`HTTP(S)_PROXY`）、自动检测 JS runtime（`--js-runtimes node`）、使用 `player_client=android` 规避 403
+- **内置二进制**：安装包内置 yt-dlp / ffmpeg / ffprobe，解压即用、零配置
+- **构建适配**：`where` 命令、打包 artifact 命名区分等
 
-# 或一键下载内置二进制 + 应用补丁 + 构建安装包
-windows-fixes\build-windows-installer.cmd
+若需重新构建 Windows 安装包（含内置二进制），在 Windows 上执行：
+
+```bat
+npm install
+npm run build
+npx electron-builder --win nsis zip
 ```
 
-覆盖的修复：yt-dlp GBK 文件名解码、Windows 盘符路径（`/C:/...` → `C:/...`）、`where` 命令适配、内置二进制查找、打包 artifact 命名冲突等。详见 [windows-fixes/README.md](windows-fixes/README.md)。
+产物在 `release/`：`LinguaFlix-<version>-win.zip`（绿色版）与 `LinguaFlix-<version>-win-setup.exe`（安装版）。
 
 ## 构建与发布
 
