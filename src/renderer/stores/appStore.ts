@@ -23,6 +23,7 @@ interface AppActions {
   // Video registry
   registerVideo: (meta: VideoMeta) => void
   removeVideo: (hash: string) => void
+  renameVideo: (hash: string, newName: string) => void
   markOpened: (hash: string) => void
   setVideoThumbnail: (hash: string, dataUrl: string) => void
 
@@ -88,6 +89,17 @@ export const useAppStore = create<AppState & AppActions>((set, get) => {
         const v = s.videos[hash]
         if (!v) return {}
         return { videos: { ...s.videos, [hash]: { ...v, thumbnailDataUrl: dataUrl } } }
+      })
+      get().persistAppData()
+    },
+
+    renameVideo: (hash, newName) => {
+      const name = newName.trim()
+      if (!name) return
+      set((s) => {
+        const v = s.videos[hash]
+        if (!v) return {}
+        return { videos: { ...s.videos, [hash]: { ...v, fileName: name } } }
       })
       get().persistAppData()
     },

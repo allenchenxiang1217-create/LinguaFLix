@@ -20,8 +20,9 @@ import { useSettingsStore } from '../../stores/settingsStore'
 import {
   Play, BookOpen, Plus, Clock, BookMarked, Film,
   Trash2, AlertCircle, Search, Library, HelpCircle, Flame, Settings,
-  NotebookPen, BookOpenText, Moon, Sun, Scissors
+  NotebookPen, BookOpenText, Moon, Sun, Scissors, Pencil
 } from 'lucide-react'
+import { RenameInline } from './RenameInline'
 
 // 六种影片标题卡式氛围底，按视频 hash 稳定映射，保证同一视频每次打开缩略图颜色一致。
 const THUMBS = ['thumb-nature', 'thumb-movie', 'thumb-conversation', 'thumb-space', 'thumb-animation', 'thumb-city']
@@ -41,6 +42,7 @@ export function Dashboard() {
     refreshStats,
     setAppPhase,
     removeVideo,
+    renameVideo,
     markOpened,
     dashboardReturnView,
     setDashboardReturnView,
@@ -51,6 +53,7 @@ export function Dashboard() {
   const words = useVocabularyStore((s) => s.words)
   const { t, language } = useI18n()
   const [deleteConfirmHash, setDeleteConfirmHash] = useState<string | null>(null)
+  const [renameHash, setRenameHash] = useState<string | null>(null)
   const [loadError, setLoadError] = useState<string | null>(null)
   const [search, setSearch] = useState('')
   const [navView, setNavView] = useState<'library' | 'recent' | 'review' | 'clip' | 'settings' | 'tutorial'>('library')
@@ -152,6 +155,20 @@ export function Dashboard() {
       setDeleteConfirmHash(hash)
     }
   }
+
+  // 进入重命名编辑态（同时关闭删除确认态）
+  const startRename = (hash: string, e: React.MouseEvent) => {
+    e.stopPropagation()
+    setDeleteConfirmHash(null)
+    setRenameHash(hash)
+  }
+
+  const handleRenameSave = (hash: string, name: string) => {
+    renameVideo(hash, name)
+    setRenameHash(null)
+  }
+
+  const cancelRename = () => setRenameHash(null)
 
   // 复习视频只在「复习视频」页面管理，不作为普通视频出现在视频库/最近学习。
   const libraryVideos = Object.values(videos).filter((v) => !v.isReviewClip)
@@ -479,10 +496,20 @@ export function Dashboard() {
                             </div>
 
                             <div className="flex-1 min-w-0">
-                              <p className="text-sm font-semibold leading-snug text-foreground truncate">{video.fileName}</p>
-                              <p className="mt-0.5 text-xs text-muted-foreground truncate">
-                                {minutes > 0 ? t('dashboard.list.minutes', { n: minutes }) : ' '}
-                              </p>
+                              {renameHash === video.hash ? (
+                                <RenameInline
+                                  initial={video.fileName}
+                                  onSave={(name) => handleRenameSave(video.hash, name)}
+                                  onCancel={cancelRename}
+                                />
+                              ) : (
+                                <>
+                                  <p className="text-sm font-semibold leading-snug text-foreground truncate">{video.fileName}</p>
+                                  <p className="mt-0.5 text-xs text-muted-foreground truncate">
+                                    {minutes > 0 ? t('dashboard.list.minutes', { n: minutes }) : ' '}
+                                  </p>
+                                </>
+                              )}
                             </div>
 
                             <span className="hidden lg:flex w-[88px] shrink-0 items-center gap-1.5 text-muted-foreground">
@@ -498,6 +525,18 @@ export function Dashboard() {
                             <span className="w-[92px] shrink-0 text-right text-xs text-muted-foreground whitespace-nowrap">
                               {formatRelative(video.lastOpenedAt)}
                             </span>
+
+                            <button
+                              onClick={(e) => startRename(video.hash, e)}
+                              onKeyDown={(e) => e.stopPropagation()}
+                              aria-label={t('dashboard.rename.label')}
+                              title={t('dashboard.rename.label')}
+                              className="w-8 h-8 shrink-0 flex items-center justify-center rounded-lg transition-all cursor-pointer
+                                         text-muted-foreground/60 hover:text-primary hover:bg-primary/10
+                                         opacity-0 group-hover:opacity-100 focus-visible:opacity-100"
+                            >
+                              <Pencil size={13} />
+                            </button>
 
                             <button
                               onClick={(e) => handleDeleteVideo(video.hash, e)}
@@ -616,24 +655,44 @@ export function Dashboard() {
                           </span>
                         </div>
                         <div className="p-3.5">
-                          <p className="text-sm font-semibold leading-snug text-foreground truncate">{video.fileName}</p>
-                          <p className="mt-1 text-xs text-muted-foreground">
-                            {video.lastOpenedAt > 0
-                              ? `${t('dashboard.continue.lastOpened')} · ${new Date(video.lastOpenedAt).toLocaleDateString(language === 'zh' ? 'zh-CN' : 'en-US')}`
-                              : t('dashboard.all.neverOpened')}
-                          </p>
+                          {renameHash === video.hash ? (
+                            <RenameInline
+                              initial={video.fileName}
+                              onSave={(name) => handleRenameSave(video.hash, name)}
+                              onCancel={cancelRename}
+                            />
+                          ) : (
+                            <>
+                              <p className="text-sm font-semibold leading-snug text-foreground truncate">{video.fileName}</p>
+                              <p className="mt-1 text-xs text-muted-foreground">
+                                {video.lastOpenedAt > 0
+                                  ? `${t('dashboard.continue.lastOpened')} · ${new Date(video.lastOpenedAt).toLocaleDateString(language === 'zh' ? 'zh-CN' : 'en-US')}`
+                                  : t('dashboard.all.neverOpened')}
+                              </p>
+                            </>
+                          )}
                         </div>
-                        <button
-                          onClick={(e) => handleDeleteVideo(video.hash, e)}
-                          className={`absolute top-2 right-2 p-1.5 rounded-lg transition-all cursor-pointer
-                            ${deleteConfirmHash === video.hash
-                              ? 'bg-destructive/80 text-white'
-                              : 'bg-black/40 text-white/80 hover:bg-destructive/80 hover:text-white opacity-0 group-hover:opacity-100'
-                            }`}
-                          title={deleteConfirmHash === video.hash ? t('dashboard.delete.confirm') : t('dashboard.delete.label')}
-                        >
-                          {deleteConfirmHash === video.hash ? <AlertCircle size={12} /> : <Trash2 size={12} />}
-                        </button>
+                        <div className="absolute top-2 right-2 flex items-center gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
+                          <button
+                            onClick={(e) => startRename(video.hash, e)}
+                            aria-label={t('dashboard.rename.label')}
+                            title={t('dashboard.rename.label')}
+                            className="p-1.5 rounded-lg bg-black/40 text-white/80 hover:bg-primary/70 hover:text-white transition-all cursor-pointer"
+                          >
+                            <Pencil size={12} />
+                          </button>
+                          <button
+                            onClick={(e) => handleDeleteVideo(video.hash, e)}
+                            className={`p-1.5 rounded-lg transition-all cursor-pointer
+                              ${deleteConfirmHash === video.hash
+                                ? 'bg-destructive/80 text-white'
+                                : 'bg-black/40 text-white/80 hover:bg-destructive/80 hover:text-white'
+                              }`}
+                            title={deleteConfirmHash === video.hash ? t('dashboard.delete.confirm') : t('dashboard.delete.label')}
+                          >
+                            {deleteConfirmHash === video.hash ? <AlertCircle size={12} /> : <Trash2 size={12} />}
+                          </button>
+                        </div>
                       </button>
                     ))}
                   </div>

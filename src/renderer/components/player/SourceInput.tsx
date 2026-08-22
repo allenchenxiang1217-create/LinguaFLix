@@ -4,6 +4,7 @@ import { useAppStore } from '../../stores/appStore'
 import { useNoteStore } from '../../stores/noteStore'
 import { useToastStore } from '../../stores/toastStore'
 import { useSettingsStore } from '../../stores/settingsStore'
+import { useSubtitleStore } from '../../stores/subtitleStore'
 import { useI18n } from '../../i18n/useI18n'
 import { useSubtitle } from '../../hooks/useSubtitle'
 import { loadNotebook, VideoOcrRegionStorage } from '../../services/storage-service'
@@ -15,7 +16,7 @@ import {
   type DownloadProgress,
 } from '../../services/stream-resolver'
 import {
-  Upload, Link, FileText, Film,
+  Upload, Link, FileText, Film, X,
   Loader2, AlertCircle, Download, CheckCircle2,
 } from 'lucide-react'
 import { simpleHash } from '../../lib/hash'
@@ -77,6 +78,8 @@ export function SourceInput() {
   const videoHash = usePlayerStore((s) => s.videoHash)
   const loadVideo = usePlayerStore((s) => s.loadVideo)
   const { loadSubtitleFile } = useSubtitle()
+  const hasSubtitle = useSubtitleStore((s) => s.subtitles.length > 0)
+  const clearSubtitles = useSubtitleStore((s) => s.clearSubtitles)
   const registerVideo = useAppStore((s) => s.registerVideo)
   // 原始文件名（注册进 appStore 时保存），compact 顶部栏优先显示它而非 URL-encoded 的 src 段。
   const videoFileName = useAppStore((s) => (videoHash ? s.videos[videoHash]?.fileName : undefined))
@@ -453,6 +456,17 @@ export function SourceInput() {
           >
             {t('import.subtitles')}
           </button>
+          {hasSubtitle && (
+            <button
+              onClick={clearSubtitles}
+              title={t('import.removeSubtitles')}
+              className="flex items-center gap-1 text-[0.6875rem] px-2 py-1 rounded-lg hover:bg-destructive/10 transition-colors cursor-pointer
+                         text-muted-foreground hover:text-destructive font-medium"
+            >
+              <X size={12} />
+              {t('import.removeSubtitles')}
+            </button>
+          )}
         </div>
         <input ref={videoInputRef} type="file" accept="video/*" className="hidden" onChange={handleFileChange} />
         <input ref={subInputRef} type="file" accept=".srt,.vtt,.ass,.ssa" className="hidden" onChange={handleSubFileChange} />
