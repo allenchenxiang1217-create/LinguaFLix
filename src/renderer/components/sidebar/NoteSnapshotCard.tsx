@@ -552,7 +552,8 @@ export function NoteSnapshotCard({ snapshot, noteId, readOnly = false }: NoteSna
               src={snapshot.imageDataUrl}
               alt={t('notes.fullFrame')}
               onClick={(e) => e.stopPropagation()}
-              className="max-w-[92vw] max-h-[88vh] object-contain rounded-lg shadow-2xl shadow-black/60"
+              className="max-w-[96vw] max-h-[92vh] w-auto h-auto object-contain rounded-lg shadow-2xl shadow-black/60"
+              style={{ width: 'auto', height: 'auto' }}
             />
           </div>,
           portalTarget(),

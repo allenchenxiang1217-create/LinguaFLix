@@ -6,6 +6,7 @@ import { Notebook, BookOpen, X } from 'lucide-react'
 import { useNoteStore } from '../../stores/noteStore'
 import { usePlayerStore } from '../../stores/playerStore'
 import { useAppStore } from '../../stores/appStore'
+import { useSubtitleStore } from '../../stores/subtitleStore'
 import { useKeyboardShortcuts } from '../../hooks/useKeyboardShortcuts'
 import { SettingsPage } from '../dashboard/SettingsPage'
 import { useI18n } from '../../i18n/useI18n'
@@ -37,6 +38,41 @@ export function AppLayout() {
       setSidebarMode('narrow')
     }
   }, [isFullscreen, setSidebarMode])
+
+  // 侧边栏展开（full）或悬浮预览（popup 激活）时自动隐藏字幕与挡块，
+  // 避免遮挡笔记面板（点开笔记/看截图/回放都不被挡块盖住）；
+  // 收起/移开时恢复原来的可见状态。popup hover 加 150ms 延迟，避免鼠标
+  // 略过窄栏就闪一下挡块。
+  const blockerVisibleBeforeRef = useRef<boolean | null>(null)
+  const panelActive = sidebarMode === 'full' || (sidebarMode === 'narrow' && sidebarHovered)
+  const hideBlockerTimerRef = useRef<number>(0)
+  useEffect(() => {
+    const st = useSubtitleStore.getState()
+    const hideBlocker = () => {
+      if (blockerVisibleBeforeRef.current == null) blockerVisibleBeforeRef.current = st.blockerVisible
+      if (st.blockerVisible) st.setBlockerVisible(false)
+    }
+    const restoreBlocker = () => {
+      clearTimeout(hideBlockerTimerRef.current)
+      if (blockerVisibleBeforeRef.current != null) {
+        st.setBlockerVisible(blockerVisibleBeforeRef.current)
+        blockerVisibleBeforeRef.current = null
+      }
+    }
+    if (panelActive) {
+      if (sidebarMode === 'full') {
+        clearTimeout(hideBlockerTimerRef.current)
+        hideBlocker()
+      } else {
+        // popup hover：延迟 150ms 隐藏（full 立即隐藏）
+        clearTimeout(hideBlockerTimerRef.current)
+        hideBlockerTimerRef.current = window.setTimeout(hideBlocker, 150)
+      }
+    } else {
+      restoreBlocker()
+    }
+    return () => clearTimeout(hideBlockerTimerRef.current)
+  }, [panelActive, sidebarMode])
 
   // Clear the pending hide timer on unmount.
   useEffect(() => () => clearTimeout(hideTimerRef.current), [])

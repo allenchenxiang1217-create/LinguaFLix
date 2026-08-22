@@ -29,7 +29,7 @@ export function VideoControls({ onSnapshot, showSnapshot = true }: VideoControls
 
   return (
     <div
-      className="absolute bottom-0 left-0 right-0 px-4 pb-3 pt-12 z-20
+      className="absolute bottom-0 left-0 right-0 px-4 pb-3 pt-12 z-[50]
                  bg-gradient-to-t from-black/90 via-black/40 to-transparent
                  opacity-0 group-hover:opacity-100 transition-opacity duration-300
                  pointer-events-none group-hover:pointer-events-auto"

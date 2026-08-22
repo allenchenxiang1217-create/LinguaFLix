@@ -4,6 +4,7 @@ import { useAppStore } from '../../stores/appStore'
 import { useNoteStore } from '../../stores/noteStore'
 import { useSettingsStore } from '../../stores/settingsStore'
 import { useSubtitleStore } from '../../stores/subtitleStore'
+import { useToastStore } from '../../stores/toastStore'
 import { useSubtitle } from '../../hooks/useSubtitle'
 import { useScreenshot } from '../../hooks/useScreenshot'
 import { OCRService } from '../../services/ocr-service'
@@ -13,7 +14,7 @@ import { PlayerToolRail } from './PlayerToolRail'
 import { SubtitleOverlay } from '../subtitles/SubtitleOverlay'
 import { SubtitleBlocker } from '../subtitles/SubtitleBlocker'
 import { NotesPanel } from '../sidebar/NotesPanel'
-import { Film, Notebook, BookOpen } from 'lucide-react'
+import { Film, Notebook, BookOpen, CheckCircle2 } from 'lucide-react'
 import { useI18n } from '../../i18n/useI18n'
 
 const ocrInitialized = { current: false }
@@ -48,12 +49,17 @@ export function VideoPlayer() {
   const [videoError, setVideoError] = useState<string | null>(null)
   // #6 全屏态悬浮的笔记/生词面板（按钮在右上角，面板浮在视频上，退出全屏时关闭）
   const [fsPanel, setFsPanel] = useState<'notes' | 'vocab' | null>(null)
+  // 截图闪光反馈：用覆盖层而非容器 box-shadow（后者在全屏元素上不可见）
+  const [snapshotFlash, setSnapshotFlash] = useState(false)
+  const flashTimerRef = useRef<number>(0)
 
   const { t } = useI18n()
   const videoSrc = usePlayerStore((s) => s.videoSrc)
   const videoHash = usePlayerStore((s) => s.videoHash)
   const isReviewClip = useAppStore((s) => (videoHash ? !!s.videos[videoHash]?.isReviewClip : false))
   const isFullscreen = usePlayerStore((s) => s.isFullscreen)
+  // 全屏时全局 Toast 被 fullscreen 元素盖住不可见 → 在播放器内渲染一份全屏专用提示。
+  const toastMessage = useToastStore((s) => s.message)
   const setVideoRef = usePlayerStore((s) => s.setVideoRef)
   const setContainerRef = usePlayerStore((s) => s.setContainerRef)
   const { syncCueIndex } = useSubtitle()
@@ -248,13 +254,13 @@ export function VideoPlayer() {
     // 无感截屏：与快捷键（takeSnapshotRef）一致，只做闪光反馈，不弹出侧边栏
     if (isReviewClip) return
     const snapshotId = await takeSnapshot()
-    if (snapshotId && containerRef.current) {
-      // Flash feedback
-      clearTimeout(shadowTimerRef.current)
-      containerRef.current.style.boxShadow = 'inset 0 0 100px rgba(129, 140, 248, 0.25)'
-      shadowTimerRef.current = window.setTimeout(() => {
-        if (containerRef.current) containerRef.current.style.boxShadow = ''
-      }, 200)
+    if (snapshotId) {
+      // Flash feedback — 用覆盖层而非容器 box-shadow：box-shadow（尤其 inset）
+      // 在全屏元素上不渲染，导致全屏截图"没有反馈"。覆盖层在普通与全屏
+      // 渲染路径下都可见。
+      clearTimeout(flashTimerRef.current)
+      setSnapshotFlash(true)
+      flashTimerRef.current = window.setTimeout(() => setSnapshotFlash(false), 200)
     }
   }, [isReviewClip, takeSnapshot])
 
@@ -303,7 +309,7 @@ export function VideoPlayer() {
       <video
         ref={videoRef}
         src={videoSrc}
-        className="w-full h-full object-cover relative z-10"
+        className="w-full h-full object-contain relative z-10"
         onTimeUpdate={handleTimeUpdate}
         onLoadedMetadata={handleLoadedMetadata}
         onCanPlay={handleCanPlay}
@@ -315,6 +321,13 @@ export function VideoPlayer() {
           isPlaying ? pause() : play()
         }}
       />
+
+      {/* 截图闪光反馈覆盖层（全屏/非全屏均可见） */}
+      {snapshotFlash && (
+        <div className="absolute inset-0 z-[15] pointer-events-none animate-flash-out"
+             style={{ background: 'radial-gradient(circle at center, rgba(129,140,248,0.18) 0%, rgba(129,140,248,0.35) 100%)' }}
+        />
+      )}
 
       {/* #6 全屏态：笔记/生词按钮常驻右上角，点开悬浮面板（渲染在 fullscreen 元素内才能可见） */}
       {isFullscreen && (
@@ -359,6 +372,17 @@ export function VideoPlayer() {
                             border border-white/10 bg-zinc-900/95 backdrop-blur-md shadow-2xl shadow-black/60
                             flex flex-col overflow-hidden animate-fade-in">
               <NotesPanel />
+            </div>
+          )}
+
+          {/* 全屏专用提示：全局 Toast 在全屏元素外不可见，这里在元素内渲染一份 */}
+          {toastMessage && (
+            <div className="absolute bottom-16 left-1/2 -translate-x-1/2 z-[60] pointer-events-none">
+              <div className="flex items-center gap-2 px-4 py-2 rounded-full bg-zinc-900/95 backdrop-blur-md
+                              border border-success/40 text-sm text-white shadow-xl shadow-black/60 animate-fade-in whitespace-nowrap">
+                <CheckCircle2 size={14} className="text-success shrink-0" />
+                {toastMessage}
+              </div>
             </div>
           )}
         </>
