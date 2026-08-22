@@ -3,8 +3,9 @@ import { createPortal } from 'react-dom'
 import { usePlayerStore } from '../../stores/playerStore'
 import { useAppStore } from '../../stores/appStore'
 import { useSubtitleStore } from '../../stores/subtitleStore'
-import { Eye, EyeOff, SquareDashed, Gauge, Volume2, VolumeX } from 'lucide-react'
+import { Eye, EyeOff, SquareDashed, Gauge, Volume2, VolumeX, Languages } from 'lucide-react'
 import { BlockerPanel } from '../subtitles/BlockerSettings'
+import { SubtitleDisplayPanel } from '../subtitles/SubtitleDisplayPanel'
 import { OcrRegionButton } from '../transcript/OcrRegionButton'
 import { useI18n } from '../../i18n/useI18n'
 import { portalTarget } from '../../lib/portal'
@@ -13,7 +14,7 @@ import { portalTarget } from '../../lib/portal'
  * #4 右侧工具栏：把倍速、音量、挡块调节与 OCR 区域收敛到视频右侧一条纵向工具条，
  * 底部控制条（VideoControls）相应精简。
  */
-type PanelKind = 'blocker' | 'speed' | 'volume' | null
+type PanelKind = 'blocker' | 'subtitle' | 'speed' | 'volume' | null
 
 const SPEEDS = [0.5, 0.75, 1, 1.25, 1.5, 2]
 
@@ -44,6 +45,7 @@ export function PlayerToolRail() {
 
   const blockerVisible = useSubtitleStore((s) => s.blockerVisible)
   const setBlockerVisible = useSubtitleStore((s) => s.setBlockerVisible)
+  const displayMode = useSubtitleStore((s) => s.displayMode)
   const playbackRate = usePlayerStore((s) => s.playbackRate)
   const setPlaybackRate = usePlayerStore((s) => s.setPlaybackRate)
   const volume = usePlayerStore((s) => s.volume)
@@ -71,7 +73,7 @@ export function PlayerToolRail() {
   const railBtn = 'w-9 h-9 rounded-xl border backdrop-blur-sm grid place-items-center transition-colors cursor-pointer'
 
   return (
-    <div className="absolute right-2.5 top-1/2 -translate-y-1/2 z-40 flex flex-col gap-1.5">
+    <div className="absolute right-2.5 top-1/2 -translate-y-1/2 z-[46] flex flex-col gap-1.5">
       {/* 挡块显示/隐藏 */}
       <button
         data-testid="blocker-visibility-btn"
@@ -96,6 +98,26 @@ export function PlayerToolRail() {
           : 'bg-black/40 border-white/10 text-white/70 hover:text-white hover:bg-black/60'}`}
       >
         <SquareDashed size={15} />
+      </button>
+
+      {/* 字幕语言显示模式 */}
+      <button
+        data-testid="subtitle-display-btn"
+        onClick={(e) => openPanel('subtitle', e)}
+        title={t('subtitleDisplay.title')}
+        className={`${railBtn} relative ${
+          panel === 'subtitle' || displayMode !== 'bilingual'
+            ? 'bg-primary/25 border-primary/40 text-primary'
+            : 'bg-black/40 border-white/10 text-white/70 hover:text-white hover:bg-black/60'
+        }`}
+      >
+        <Languages size={15} />
+        {displayMode !== 'bilingual' && (
+          <span className="absolute -bottom-0.5 -right-0.5 w-4 h-4 rounded-full bg-primary text-primary-foreground
+                           text-[0.5rem] font-bold grid place-items-center leading-none">
+            {displayMode === 'none' ? '✕' : displayMode === 'english' ? 'EN' : '中'}
+          </span>
+        )}
       </button>
 
       {/* OCR 区域仅用于普通视频；复习视频保持四按钮布局。 */}
@@ -138,6 +160,12 @@ export function PlayerToolRail() {
       {/* 面板 */}
       {panel === 'blocker' && pos && (
         <BlockerPanel top={pos.top} left={pos.left} onClose={() => setPanel(null)} />
+      )}
+
+      {panel === 'subtitle' && pos && (
+        <ToolCard top={pos.top} left={pos.left} width={216} onClose={() => setPanel(null)}>
+          <SubtitleDisplayPanel />
+        </ToolCard>
       )}
 
       {panel === 'speed' && pos && (

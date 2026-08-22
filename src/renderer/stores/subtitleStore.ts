@@ -12,6 +12,9 @@ const DEFAULT_BLOCKER: BlockerConfig = {
 /** localStorage key for the blocker's persisted appearance. */
 const BLOCKER_STORAGE_KEY = 'linguaflix-blocker-v1'
 
+/** 字幕语言显示模式：无字幕 / 双语 / 仅英文 / 仅中文。 */
+export type SubtitleDisplayMode = 'none' | 'bilingual' | 'english' | 'chinese'
+
 /** Sanitize a persisted blocker config so stale/corrupt data can't break layout. */
 function sanitizeConfig(value: unknown): BlockerConfig | null {
   if (!value || typeof value !== 'object') return null
@@ -30,6 +33,8 @@ interface SubtitleState {
   subtitles: SubtitleCue[]
   subtitleFileName: string | null
   currentCueIndex: number
+  /** 字幕语言显示模式（双语/仅英文/仅中文）。 */
+  displayMode: SubtitleDisplayMode
   blockerVisible: boolean
   blockerLocked: boolean
   blockerOpacity: number
@@ -41,6 +46,7 @@ interface SubtitleActions {
   loadSubtitles: (cues: SubtitleCue[], fileName?: string) => void
   clearSubtitles: () => void
   setCurrentCueIndex: (index: number) => void
+  setDisplayMode: (mode: SubtitleDisplayMode) => void
   toggleBlocker: () => void
   setBlockerVisible: (visible: boolean) => void
   setBlockerLocked: (locked: boolean) => void
@@ -57,6 +63,7 @@ export const useSubtitleStore = create<SubtitleState & SubtitleActions>()(
       subtitles: [],
       subtitleFileName: null,
       currentCueIndex: -1,
+      displayMode: 'bilingual',
       blockerVisible: true,
       blockerLocked: false,
       blockerOpacity: 1,
@@ -69,6 +76,8 @@ export const useSubtitleStore = create<SubtitleState & SubtitleActions>()(
       clearSubtitles: () => set({ subtitles: [], subtitleFileName: null, currentCueIndex: -1 }),
 
       setCurrentCueIndex: (index) => set({ currentCueIndex: index }),
+
+      setDisplayMode: (mode) => set({ displayMode: mode }),
 
       toggleBlocker: () => set((s) => ({ blockerVisible: !s.blockerVisible })),
 
@@ -95,6 +104,7 @@ export const useSubtitleStore = create<SubtitleState & SubtitleActions>()(
         blockerConfig: s.blockerConfig,
         blockerOpacity: s.blockerOpacity,
         blockerEffect: s.blockerEffect,
+        displayMode: s.displayMode,
       }),
       merge: (persisted, current) => {
         const p = (persisted ?? {}) as Partial<SubtitleState>
@@ -105,6 +115,9 @@ export const useSubtitleStore = create<SubtitleState & SubtitleActions>()(
           next.blockerOpacity = p.blockerOpacity
         }
         if (p.blockerEffect === 'solid' || p.blockerEffect === 'blur') next.blockerEffect = p.blockerEffect
+        if (p.displayMode === 'none' || p.displayMode === 'bilingual' || p.displayMode === 'english' || p.displayMode === 'chinese') {
+          next.displayMode = p.displayMode
+        }
         return next
       },
     },

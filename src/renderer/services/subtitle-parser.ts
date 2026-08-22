@@ -6,10 +6,55 @@ import type { SubtitleCue } from '@shared/types'
  */
 export function parseSubtitleFile(content: string, fileName?: string): SubtitleCue[] {
   const ext = fileName?.split('.').pop()?.toLowerCase()
-  if (ext === 'vtt' || content.trimStart().startsWith('WEBVTT')) {
-    return parseVtt(content)
+  const cues = ext === 'vtt' || content.trimStart().startsWith('WEBVTT')
+    ? parseVtt(content)
+    : parseSrt(content)
+  return mergeOverlappingCues(cues)
+}
+
+/**
+ * 合并同一时间段的多条字幕（常见于「双语字幕」文件：英文与中文各自成块，
+ * 但时间戳完全一致）。合并后 text 用换行拼接，供显示层按语言过滤。
+ *
+ * 匹配规则：
+ *   - startTime 相差 ≤ 0.3s（容差，吸收毫秒级舍入差异）
+ *   - 且两者时间区间重叠（endTime ≥ 对方 startTime）
+ * 合并后保留最早 start、最晚 end，text 按「英文行在前、中文行在后」重排，
+ * 方便显示层区分主语言。
+ */
+function mergeOverlappingCues(cues: SubtitleCue[]): SubtitleCue[] {
+  const sorted = [...cues].sort((a, b) => a.startTime - b.startTime || a.id - b.id)
+  const merged: SubtitleCue[] = []
+
+  for (const cue of sorted) {
+    const prev = merged[merged.length - 1]
+    const timeOverlap =
+      prev && Math.abs(cue.startTime - prev.startTime) <= 0.3 && cue.endTime >= prev.startTime
+
+    if (timeOverlap) {
+      // 合并：同一时刻的两条字幕拼成多行
+      const combined = prev.text.split('\n').concat(cue.text.split('\n'))
+      // 去重（同语言同文本），并按「英文行在前、中文行在后」排序
+      const uniq: string[] = []
+      for (const line of combined) {
+        const t = line.trim()
+        if (t && !uniq.includes(t)) uniq.push(t)
+      }
+      const isZh = (s: string) => /[\u4e00-\u9fff\u3400-\u4dbf]/.test(s)
+      uniq.sort((a, b) => {
+        const aZh = isZh(a), bZh = isZh(b)
+        if (aZh !== bZh) return aZh ? 1 : -1 // 英文在前
+        return 0
+      })
+      prev.text = uniq.join('\n')
+      prev.endTime = Math.max(prev.endTime, cue.endTime)
+      // 保留原 id 中较小的
+      prev.id = Math.min(prev.id, cue.id)
+    } else {
+      merged.push({ ...cue })
+    }
   }
-  return parseSrt(content)
+  return merged
 }
 
 /** Parse SRT format */
